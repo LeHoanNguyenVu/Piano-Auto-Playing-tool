@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Build files
+build/
+dist/
+*.spec
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+
+# Project specific
+_nanoMIDI_ref/
+library/songs/
+settings.json
