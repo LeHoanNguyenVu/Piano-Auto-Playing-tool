@@ -134,6 +134,14 @@ def delete_song(song_id):
     return False
 
 
+def clear_all_songs():
+    """Xóa toàn bộ danh sách nhạc import thủ công (bao gồm cả file vật lý)."""
+    data = _load_metadata()
+    songs = data.get("songs", [])
+    for s in list(songs):
+        delete_song(s["id"])
+
+
 def update_song(song_id, **kwargs):
     """Update song metadata fields (title, artist, genre, difficulty)."""
     data = _load_metadata()

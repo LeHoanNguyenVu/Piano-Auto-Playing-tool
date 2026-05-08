@@ -1,60 +1,18 @@
 {
   "songs": [
     {
-      "id": "2ab78f74",
-      "title": "Right Hand",
+      "id": "1fab0a17",
+      "title": "Unravel - Tokyo Ghoul",
       "artist": "Unknown",
-      "filename": "2ab78f74_Nang Am Xa Dan.mid",
-      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\2ab78f74_Nang Am Xa Dan.mid",
-      "duration": 246.7,
-      "note_count": 1140,
-      "tempo_bpm": 120,
-      "track_count": 3,
-      "difficulty": "",
-      "genre": "",
-      "added_date": "2026-05-05 21:08"
-    },
-    {
-      "id": "d369ef02",
-      "title": "0013GIVE",
-      "artist": "Unknown",
-      "filename": "d369ef02_Never-Gonna-Give-You-Up-3.mid",
-      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\d369ef02_Never-Gonna-Give-You-Up-3.mid",
-      "duration": 216.2,
-      "note_count": 4433,
-      "tempo_bpm": 90,
-      "track_count": 1,
-      "difficulty": "",
-      "genre": "",
-      "added_date": "2026-05-05 21:08"
-    },
-    {
-      "id": "97bde18c",
-      "title": "Piano",
-      "artist": "Unknown",
-      "filename": "97bde18c_Em Của Ngày Hôm Qua.mid",
-      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\97bde18c_Em Của Ngày Hôm Qua.mid",
-      "duration": 132.5,
-      "note_count": 340,
-      "tempo_bpm": 60,
+      "filename": "1fab0a17_Tokyo_Ghoul_Unravel_Fingerstyle.mid",
+      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\1fab0a17_Tokyo_Ghoul_Unravel_Fingerstyle.mid",
+      "duration": 252.9,
+      "note_count": 2015,
+      "tempo_bpm": 130,
       "track_count": 2,
       "difficulty": "",
       "genre": "",
-      "added_date": "2026-05-05 21:54"
-    },
-    {
-      "id": "c10ad378",
-      "title": "Right Hand",
-      "artist": "Unknown",
-      "filename": "c10ad378_Nang Am Xa Dan.mid",
-      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\c10ad378_Nang Am Xa Dan.mid",
-      "duration": 246.7,
-      "note_count": 1140,
-      "tempo_bpm": 120,
-      "track_count": 3,
-      "difficulty": "",
-      "genre": "",
-      "added_date": "2026-05-08 19:32"
+      "added_date": "2026-05-09 00:22"
     }
   ]
 }

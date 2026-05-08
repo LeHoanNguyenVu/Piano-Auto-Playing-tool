@@ -7,9 +7,51 @@ Các bài này đã được tải về máy và lưu trong thư mục library/f
 
 import os
 import customtkinter as ctk
-from tkinter import filedialog
 from ui import theme as T
-from library import cloud_database, song_manager
+from library import cloud_database
+
+
+class ConfirmationDialog(ctk.CTkToplevel):
+    """Custom premium-looking confirmation dialog."""
+    def __init__(self, parent, title, message, on_confirm):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("400x200")
+        self.on_confirm = on_confirm
+        
+        # Center the window
+        self.after(10, self._center_window)
+        
+        self.configure(fg_color=T.BG_CARD)
+        self.attributes("-topmost", True)
+        self.resizable(False, False)
+        
+        # UI
+        ctk.CTkLabel(self, text=title, font=T.FONT_HEADING, text_color=T.TEXT_ACCENT).pack(pady=(20, 10))
+        ctk.CTkLabel(self, text=message, font=T.FONT_SMALL, text_color=T.TEXT_SECONDARY, wraplength=350).pack(pady=10)
+        
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(side="bottom", pady=20)
+        
+        ctk.CTkButton(btn_frame, text="Hủy", width=100, height=32, 
+                       fg_color=T.BG_ELEVATED, hover_color=T.BG_CARD_HOVER,
+                       command=self.destroy).pack(side="left", padx=10)
+        
+        ctk.CTkButton(btn_frame, text="Xác nhận xóa", width=120, height=32,
+                       fg_color=T.ERROR, hover_color="#dc2626",
+                       command=self._confirm).pack(side="left", padx=10)
+
+    def _confirm(self):
+        self.on_confirm()
+        self.destroy()
+
+    def _center_window(self):
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
 
 
 class LibraryTab(ctk.CTkFrame):
@@ -29,9 +71,10 @@ class LibraryTab(ctk.CTkFrame):
                       text_color=T.TEXT_PRIMARY).pack(side="left")
 
         ctk.CTkButton(
-            header, text="📂 Import MIDI", width=130, height=32,
-            font=T.FONT_BODY_BOLD, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-            corner_radius=T.BUTTON_CORNER, command=self._import_midi
+            header, text="🗑 Xóa tất cả", width=120, height=32,
+            font=T.FONT_SMALL, fg_color=T.BG_ELEVATED, hover_color=T.ERROR,
+            text_color=T.TEXT_SECONDARY, corner_radius=T.BUTTON_CORNER,
+            command=self._clear_all
         ).pack(side="right")
 
         # ─── Info Banner ─────────────────────────────────
@@ -87,22 +130,17 @@ class LibraryTab(ctk.CTkFrame):
 
         query = self._search_var.get().lower().strip()
 
-        # Lấy danh sách từ Favorites
+        # Lấy danh sách từ Favorites (Cloud only)
         all_favs = cloud_database.get_all_favorites()
-        # Lấy thêm bài từ Local Library (import thủ công)
-        local_songs = song_manager.get_all_songs()
 
         # Gộp và filter theo query
         songs = []
         for s in all_favs:
             if not query or query in s.get('title', '').lower() or query in s.get('artist', '').lower():
                 songs.append({"source": "cloud", **s})
-        for s in local_songs:
-            if not query or query in s.get('title', '').lower() or query in s.get('artist', '').lower():
-                songs.append({"source": "local", **s})
 
         self._count_label.configure(
-            text=f"{len(songs)} bài — {len(all_favs)} từ Cloud, {len(local_songs)} import thủ công"
+            text=f"Đang có {len(songs)} bài hát trong kho yêu thích"
         )
 
         if not songs:
@@ -180,24 +218,28 @@ class LibraryTab(ctk.CTkFrame):
             self.app.show_frame("player")
 
     def _remove_song(self, song):
-        """Xóa bài khỏi danh sách (Favorites hoặc Local Library)."""
-        if song.get("source") == "cloud":
-            song_id = song.get("id", song.get("title", ""))
-            cloud_database.remove_favorite(song_id)
-        else:
-            song_manager.delete_song(song.get("id", ""))
+        """Xóa bài khỏi danh sách."""
+        # Lấy ID chính xác (ưu tiên id từ Supabase, fallback về title)
+        song_id = song.get("id")
+        if song_id is None:
+            song_id = song.get("title", "")
+        
+        # Ép kiểu về string để khớp với keys trong favorites.json
+        cloud_database.remove_favorite(str(song_id))
         self._refresh_list()
 
-    def _import_midi(self):
-        """Import MIDI file thủ công vào Local Library."""
-        paths = filedialog.askopenfilenames(
-            title="Import MIDI Files",
-            filetypes=[("MIDI Files", "*.mid *.midi"), ("All Files", "*.*")]
+    def _clear_all(self):
+        """Xóa sạch sành sanh mọi thứ trong kho với Custom Popup."""
+        if not cloud_database.get_all_favorites():
+            return
+            
+        ConfirmationDialog(
+            self, 
+            title="Dọn dẹp Thư viện",
+            message="Bạn có chắc muốn xóa toàn bộ danh sách nhạc yêu thích không? Hành động này sẽ xóa vĩnh viễn các file đã tải.",
+            on_confirm=lambda: [cloud_database.clear_all_favorites(), self._refresh_list()]
         )
-        count = 0
-        for path in paths:
-            result = song_manager.import_midi(path)
-            if result:
-                count += 1
-        if count > 0:
-            self._refresh_list()
+
+    def _import_midi(self):
+        # Chức năng này đã được chuyển sang tab Player
+        pass

@@ -10,9 +10,17 @@ Luồng:
 
 import os
 import threading
+import unicodedata
 import customtkinter as ctk
 from ui import theme as T
 from library import cloud_database
+
+
+def remove_accents(input_str):
+    """Loại bỏ dấu tiếng Việt để tìm kiếm không dấu."""
+    if not input_str: return ""
+    s = unicodedata.normalize('NFD', input_str)
+    return "".join(c for c in s if unicodedata.category(c) != 'Mn').replace('đ', 'd').replace('Đ', 'D')
 
 
 class SearchTab(ctk.CTkFrame):
@@ -61,44 +69,59 @@ class SearchTab(ctk.CTkFrame):
         search_inner.pack(fill="x", padx=15, pady=12)
 
         self._search_var = ctk.StringVar()
+        self._search_var.trace_add("write", lambda *args: self._on_input_change("title"))
+        
         self._search_entry = ctk.CTkEntry(
             search_inner, textvariable=self._search_var,
-            placeholder_text="Tìm tên bài hát hoặc nghệ sĩ...",
+            placeholder_text="Nhập tên bài hát cần tìm...",
             height=36, font=T.FONT_BODY, fg_color=T.BG_ELEVATED,
             border_color=T.BORDER, text_color=T.TEXT_PRIMARY
         )
         self._search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self._search_entry.bind("<Return>", lambda e: self._do_search())
+        self._search_entry.bind("<FocusOut>", lambda e: self.after(200, self._hide_suggestions))
 
         self._search_btn = ctk.CTkButton(
-            search_inner, text="🔍 Tìm kiếm", width=110, height=36,
+            search_inner, text="🔍 Tìm bài hát", width=110, height=36,
             font=T.FONT_BODY_BOLD, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             corner_radius=T.BUTTON_CORNER, command=self._do_search
         )
         self._search_btn.pack(side="right")
 
-        # ─── Direct URL Download ─────────────────────────
-        url_frame = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
-        url_frame.pack(fill="x", padx=20, pady=(0, 8))
+        # ─── Suggestions Overlay ─────────────────────────
+        self._suggest_frame = ctk.CTkFrame(self, fg_color=T.BG_ELEVATED, 
+                                            border_width=1, border_color=T.ACCENT_DIM,
+                                            corner_radius=4, width=545, height=1) # Sẽ co giãn theo nội dung
+        # Sẽ được pack/forget tùy lúc gõ
 
-        url_inner = ctk.CTkFrame(url_frame, fg_color="transparent")
-        url_inner.pack(fill="x", padx=15, pady=10)
+        # ─── Artist Filter ──────────────────────────────
+        artist_frame = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
+        artist_frame.pack(fill="x", padx=20, pady=(0, 8))
 
-        ctk.CTkLabel(url_inner, text="URL trực tiếp:", font=T.FONT_SMALL,
+        artist_inner = ctk.CTkFrame(artist_frame, fg_color="transparent")
+        artist_inner.pack(fill="x", padx=15, pady=10)
+
+        ctk.CTkLabel(artist_inner, text="Tìm theo Tác giả:", font=T.FONT_SMALL,
                       text_color=T.TEXT_SECONDARY).pack(side="left")
 
-        self._url_var = ctk.StringVar()
-        ctk.CTkEntry(
-            url_inner, textvariable=self._url_var,
-            placeholder_text="Dán link file .mid vào đây...",
+        self._artist_var = ctk.StringVar()
+        self._artist_var.trace_add("write", lambda *args: self._on_input_change("artist"))
+        
+        self._artist_entry = ctk.CTkEntry(
+            artist_inner, textvariable=self._artist_var,
+            placeholder_text="Tên ca sĩ, nhạc sĩ...",
             height=30, font=T.FONT_SMALL, fg_color=T.BG_ELEVATED,
             border_color=T.BORDER, text_color=T.TEXT_PRIMARY
-        ).pack(side="left", fill="x", expand=True, padx=8)
+        )
+        self._artist_entry.pack(side="left", fill="x", expand=True, padx=8)
+        self._artist_entry.bind("<Return>", lambda e: self._do_search())
+        self._artist_entry.bind("<FocusOut>", lambda e: self.after(200, self._hide_suggestions))
 
         ctk.CTkButton(
-            url_inner, text="▶ Play", width=80, height=30,
-            font=T.FONT_SMALL, fg_color=T.SUCCESS, hover_color="#16a34a",
-            corner_radius=T.BUTTON_CORNER, command=self._play_url
+            artist_inner, text="👥 Lọc tác giả", width=90, height=30,
+            font=T.FONT_SMALL, fg_color=T.BG_ELEVATED, hover_color=T.BG_CARD_HOVER,
+            text_color=T.TEXT_PRIMARY, corner_radius=T.BUTTON_CORNER, 
+            command=self._do_search
         ).pack(side="right")
 
         # ─── Result Status ────────────────────────────────
@@ -157,13 +180,28 @@ class SearchTab(ctk.CTkFrame):
             self._result_status.configure(text="⏳ Đang kết nối, vui lòng đợi...", text_color=T.WARNING)
             return
 
-        query = self._search_var.get().strip()
+        self._hide_suggestions()
+        title_q = remove_accents(self._search_var.get().strip().lower())
+        artist_q = remove_accents(self._artist_var.get().strip().lower())
+        
         self._result_status.configure(text="🔄 Đang tìm kiếm...", text_color=T.WARNING)
         self._search_btn.configure(state="disabled")
         self._show_message("Đang tìm kiếm...")
 
         def _worker():
-            results = self.db.search(query)
+            # Tìm kiếm kết hợp cả 2 ô
+            all_songs = self.db.catalog
+            results = []
+            for s in all_songs:
+                title = remove_accents(str(s.get('title', ''))).lower()
+                artist = remove_accents(str(s.get('artist', ''))).lower()
+                
+                match_title = not title_q or title_q in title
+                match_artist = not artist_q or artist_q in artist
+                
+                if match_title and match_artist:
+                    results.append(s)
+                    
             self.after(0, self._display_results, results)
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -327,6 +365,75 @@ class SearchTab(ctk.CTkFrame):
                 self.app.library_tab._refresh_list()
             except Exception:
                 pass
+
+    # ─── Suggestions Logic ────────────────────────────────
+
+    def _on_input_change(self, mode):
+        """Xử lý khi người dùng gõ vào một trong hai ô tìm kiếm."""
+        if mode == "title":
+            var = self._search_var
+            field = "title"
+            y_pos = 160
+        else:
+            var = self._artist_var
+            field = "artist"
+            y_pos = 220 # Vị trí dưới ô Tác giả
+
+        query = remove_accents(var.get().strip().lower())
+        if not query or len(query) < 1 or not self.db:
+            self._hide_suggestions()
+            return
+
+        # Lấy tối đa 5 gợi ý
+        matches = []
+        seen = set() # Tránh gợi ý lặp (đặc biệt cho artist)
+        
+        for s in self.db.catalog:
+            val = str(s.get(field, ''))
+            clean_val = remove_accents(val).lower()
+            
+            if query in clean_val and val not in seen:
+                matches.append(s)
+                seen.add(val)
+                if len(matches) >= 5: break
+
+        if matches:
+            self._show_suggestions(matches, field, y_pos)
+        else:
+            self._hide_suggestions()
+
+    def _show_suggestions(self, matches, field, y_pos):
+        # Dọn dẹp frame cũ
+        for w in self._suggest_frame.winfo_children():
+            w.destroy()
+
+        for s in matches:
+            display_text = s['title'] if field == "title" else s['artist']
+            sub_text = f" - {s['artist']}" if field == "title" else ""
+            
+            btn = ctk.CTkButton(
+                self._suggest_frame, text=f"♪ {display_text}{sub_text}",
+                anchor="w", font=T.FONT_SMALL, fg_color="transparent",
+                text_color=T.TEXT_SECONDARY, hover_color=T.BG_CARD_HOVER,
+                height=28, corner_radius=0,
+                command=lambda val=display_text, f=field: self._select_suggestion(val, f)
+            )
+            btn.pack(fill="x", padx=2, pady=1)
+
+        # Hiển thị tại vị trí tương ứng
+        self._suggest_frame.place(x=35, y=y_pos)
+        self._suggest_frame.lift()
+
+    def _select_suggestion(self, value, field):
+        if field == "title":
+            self._search_var.set(value)
+        else:
+            self._artist_var.set(value)
+        self._hide_suggestions()
+        self._do_search()
+
+    def _hide_suggestions(self):
+        self._suggest_frame.place_forget()
 
     # ─── Helpers ──────────────────────────────────────────
 

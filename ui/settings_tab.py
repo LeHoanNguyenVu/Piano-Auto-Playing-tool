@@ -61,16 +61,15 @@ class SettingsTab(ctk.CTkFrame):
         self._section("Cloud Database")
 
         cloud_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._setting_row("Cloud JSON URL", "URL to your custom catalog of MIDI files", cloud_frame)
-        self._cloud_var = ctk.StringVar(value="")
+        self._setting_row("Supabase Status", "Connection status to the cloud catalog", cloud_frame)
         
-        # We need to read it from CloudDatabase directly since it has its own load/save logic
         import library.cloud_database as cdb
         temp_db = cdb.CloudDatabase()
-        self._cloud_var.set(temp_db.cloud_url)
+        status_text = "Connected ✅" if temp_db.is_connected else "Disconnected ❌"
+        status_color = T.ACCENT if temp_db.is_connected else "#e74c3c"
 
-        ctk.CTkEntry(cloud_frame, textvariable=self._cloud_var, width=280, height=28,
-                      font=T.FONT_SMALL, fg_color=T.BG_ELEVATED, border_color=T.BORDER).pack(side="left")
+        ctk.CTkLabel(cloud_frame, text=status_text, font=T.FONT_BODY_BOLD,
+                      text_color=status_color).pack(side="left")
 
         # ─── General Settings ─────────────────────────────
         self._section("General")
@@ -106,7 +105,7 @@ class SettingsTab(ctk.CTkFrame):
         info_inner = ctk.CTkFrame(hotkey_info, fg_color="transparent")
         info_inner.pack(fill="x", padx=15, pady=12)
 
-        for key, desc in [("F1", "Play / Pause"), ("F2", "Stop")]:
+        for key, desc in [("F5", "Play"), ("F6", "Pause / Resume"), ("F7", "Stop")]:
             row = ctk.CTkFrame(info_inner, fg_color="transparent")
             row.pack(fill="x", pady=2)
             ctk.CTkLabel(row, text=key, font=T.FONT_BODY_BOLD, text_color=T.TEXT_ACCENT,
@@ -182,10 +181,6 @@ class SettingsTab(ctk.CTkFrame):
             self.config["default_speed"] = int(self._speed_var.get())
         except ValueError:
             pass
+        # Save local config
         self.config["always_on_top"] = self._aot_var.get()
         save_config(self.config)
-        
-        # Save cloud URL
-        import library.cloud_database as cdb
-        temp_db = cdb.CloudDatabase()
-        temp_db.save_config(self._cloud_var.get())

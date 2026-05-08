@@ -156,6 +156,13 @@ def remove_favorite(song_id: str):
         _save_favorites(favs)
 
 
+def clear_all_favorites():
+    """Xóa toàn bộ danh sách yêu thích (bao gồm cả file vật lý)."""
+    favs = load_favorites()
+    for song_id in list(favs.keys()):
+        remove_favorite(song_id)
+
+
 def get_all_favorites() -> list:
     """Trả về danh sách các bài yêu thích (chỉ những bài còn file trên máy)."""
     favs = load_favorites()
@@ -176,36 +183,49 @@ def get_all_favorites() -> list:
 
 # ─── Cloud Catalog ─────────────────────────────────────────
 
+from supabase import create_client, Client
+
+# Supabase Configuration
+# BẠN CẦN ĐIỀN THÔNG TIN TỪ BƯỚC 3 VÀO ĐÂY:
+SUPABASE_URL = "https://kwesvkdggikpwcwldndn.supabase.co"
+SUPABASE_KEY = "sb_publishable_vsANwYlN5txMx6LCf2Twbg_qFlg8BAL"
+
 class CloudDatabase:
     """
-    Quản lý Cloud Catalog:
-    - Kết nối Github JSON khi app khởi động
-    - Hỗ trợ Search theo tên/nghệ sĩ
-    - Tải .mid tạm thời để Play
-    - Lưu vào Favorites nếu user thả tim
+    Quản lý Cloud Catalog thông qua Supabase:
+    - Truy vấn danh sách bài hát từ bảng songs_catalog
+    - Tải .mid từ Supabase Storage
     """
 
     def __init__(self):
         self.catalog = []
-        self.cloud_url = load_cloud_url()
         self._connected = False
-        # Tải catalog ngầm — gọi refresh_catalog() để đồng bộ
-        self.refresh_catalog()
+        self.supabase: Client = None
+        
+        if SUPABASE_URL != "https://your-project-id.supabase.co":
+            try:
+                self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                self.refresh_catalog()
+            except Exception as e:
+                print(f"Lỗi kết nối Supabase: {e}")
 
     def refresh_catalog(self):
-        """Tải danh sách bài hát từ Cloud URL. Fallback nếu không kết nối được."""
+        """Tải danh sách bài hát từ Supabase Table."""
+        if not self.supabase:
+            self.catalog = list(FALLBACK_DATABASE)
+            return False
+            
         try:
-            resp = requests.get(self.cloud_url, timeout=6)
-            if resp.status_code == 200:
-                self.catalog = resp.json()
-                self._connected = True
-                return True
-        except Exception:
-            pass
-        # Không kết nối được → dùng fallback demo
-        self.catalog = list(FALLBACK_DATABASE)
-        self._connected = False
-        return False
+            # Truy vấn bảng songs_catalog
+            response = self.supabase.table("songs_catalog").select("*").execute()
+            self.catalog = response.data
+            self._connected = True
+            return True
+        except Exception as e:
+            print(f"Lỗi tải catalog: {e}")
+            self.catalog = list(FALLBACK_DATABASE)
+            self._connected = False
+            return False
 
     @property
     def is_connected(self):
@@ -216,50 +236,39 @@ class CloudDatabase:
         return len(self.catalog)
 
     def search(self, query: str) -> list:
-        """Tìm kiếm theo tên bài hoặc nghệ sĩ (không phân biệt hoa thường)."""
+        """Tìm kiếm trong catalog hiện tại."""
         if not query or not query.strip():
             return list(self.catalog)
         q = query.lower().strip()
         return [
             s for s in self.catalog
-            if q in s.get('title', '').lower() or q in s.get('artist', '').lower()
+            if q in str(s.get('title', '')).lower() or q in str(s.get('artist', '')).lower()
         ]
 
     def download_to_temp(self, song: dict) -> str:
-        """
-        Tải file .mid về thư mục temp của hệ thống để chơi thử.
-        Không lưu vào Library. Trả về đường dẫn file tạm.
-        """
+        """Tải file .mid về thư mục temp."""
         url = song.get('url')
         if not url:
             raise ValueError("Bài hát này không có link tải.")
 
-        safe_title = "".join(c for c in song.get('title', 'song') if c.isalnum() or c in ' _-').strip()
+        safe_title = "".join(c for c in str(song.get('title', 'song')) if c.isalnum() or c in ' _-').strip()
         tmp_path = Path(tempfile.gettempdir()) / f"piano_tmp_{safe_title}.mid"
 
         resp = requests.get(url, stream=True, timeout=15)
         resp.raise_for_status()
         
-        # Kiểm tra header MIDI cơ bản
+        # Kiểm tra header MIDI
         content = b""
         for chunk in resp.iter_content(chunk_size=8192):
             content += chunk
             if len(content) >= 4 and not content.startswith(b'MThd'):
-                raise ValueError("File tải về không phải là định dạng MIDI hợp lệ.")
-            if len(content) > 10 * 1024 * 1024: # Giới hạn 10MB
-                raise ValueError("File quá lớn.")
+                raise ValueError("File từ Supabase không phải là định dạng MIDI hợp lệ.")
         
         with open(tmp_path, 'wb') as f:
             f.write(content)
-            
         return str(tmp_path)
 
     def download_to_favorites(self, song: dict) -> dict:
-        """
-        Tải bài hát về máy và lưu thẳng vào Favorites.
-        Trả về metadata đã lưu.
-        """
-        # Tải về temp trước
+        """Tải và lưu vào Favorites."""
         tmp_path = self.download_to_temp(song)
-        # Sau đó lưu vào favorites/
         return add_favorite(song, tmp_path)
