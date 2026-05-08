@@ -20,4 +20,7 @@ dist/
 # Project specific
 _nanoMIDI_ref/
 library/songs/
+library/favorites/
+library/favorites.json
+library/library.json
 settings.json

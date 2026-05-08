@@ -41,6 +41,20 @@
       "difficulty": "",
       "genre": "",
       "added_date": "2026-05-05 21:54"
+    },
+    {
+      "id": "c10ad378",
+      "title": "Right Hand",
+      "artist": "Unknown",
+      "filename": "c10ad378_Nang Am Xa Dan.mid",
+      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\c10ad378_Nang Am Xa Dan.mid",
+      "duration": 246.7,
+      "note_count": 1140,
+      "tempo_bpm": 120,
+      "track_count": 3,
+      "difficulty": "",
+      "genre": "",
+      "added_date": "2026-05-08 19:32"
     }
   ]
 }

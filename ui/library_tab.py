@@ -1,16 +1,19 @@
 """
-Library Tab — Browse, search, import, and manage local MIDI song library.
+Library Tab — My Favorites (Nhạc của tôi).
+
+Chỉ hiển thị các bài hát user đã bấm ❤ Yêu thích trong tab Search.
+Các bài này đã được tải về máy và lưu trong thư mục library/favorites/.
 """
 
 import os
 import customtkinter as ctk
 from tkinter import filedialog
 from ui import theme as T
-from library import song_manager
+from library import cloud_database, song_manager
 
 
 class LibraryTab(ctk.CTkFrame):
-    """Song library browser with search, import, and management."""
+    """Màn hình Nhạc Yêu thích — hiển thị các bài đã lưu từ Cloud."""
 
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=T.PLAYER_BG, corner_radius=0)
@@ -22,7 +25,7 @@ class LibraryTab(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(20, 10))
 
-        ctk.CTkLabel(header, text="📚 Song Library", font=T.FONT_TITLE,
+        ctk.CTkLabel(header, text="❤ Nhạc Yêu Thích", font=T.FONT_TITLE,
                       text_color=T.TEXT_PRIMARY).pack(side="left")
 
         ctk.CTkButton(
@@ -30,6 +33,16 @@ class LibraryTab(ctk.CTkFrame):
             font=T.FONT_BODY_BOLD, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             corner_radius=T.BUTTON_CORNER, command=self._import_midi
         ).pack(side="right")
+
+        # ─── Info Banner ─────────────────────────────────
+        banner = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
+        banner.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(
+            banner,
+            text="Các bài bạn đã bấm ❤ trong tab Search sẽ xuất hiện ở đây.\n"
+                 "Bài yêu thích được lưu trên máy — có thể chơi mà không cần Internet.",
+            font=T.FONT_SMALL, text_color=T.TEXT_MUTED, justify="left"
+        ).pack(padx=15, pady=8, anchor="w")
 
         # ─── Search Bar ──────────────────────────────────
         search_frame = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
@@ -42,7 +55,8 @@ class LibraryTab(ctk.CTkFrame):
         self._search_var = ctk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._refresh_list())
         ctk.CTkEntry(
-            search_inner, textvariable=self._search_var, placeholder_text="Search songs...",
+            search_inner, textvariable=self._search_var,
+            placeholder_text="Tìm trong danh sách yêu thích...",
             height=30, font=T.FONT_BODY, fg_color=T.BG_ELEVATED,
             border_color=T.BORDER, text_color=T.TEXT_PRIMARY
         ).pack(side="left", fill="x", expand=True, padx=(8, 0))
@@ -59,105 +73,123 @@ class LibraryTab(ctk.CTkFrame):
         )
         self._list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
-        # Column headers
-        header_row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
-        header_row.pack(fill="x", padx=5, pady=(5, 5))
-        for text, w in [("Title", 250), ("Notes", 60), ("Duration", 70), ("Tempo", 60), ("Added", 100)]:
-            ctk.CTkLabel(header_row, text=text, font=T.FONT_TINY, text_color=T.TEXT_MUTED,
-                          width=w, anchor="w").pack(side="left", padx=2)
-
         self._song_widgets = []
         self._refresh_list()
 
     def _refresh_list(self):
-        """Refresh the song list display."""
-        # Clear existing
+        """Làm mới danh sách bài yêu thích."""
         for w in self._song_widgets:
-            w.destroy()
+            try:
+                w.destroy()
+            except Exception:
+                pass
         self._song_widgets.clear()
 
-        query = self._search_var.get()
-        songs = song_manager.search_songs(query) if query else song_manager.get_all_songs()
-        self._count_label.configure(text=f"{len(songs)} song{'s' if len(songs) != 1 else ''}")
+        query = self._search_var.get().lower().strip()
+
+        # Lấy danh sách từ Favorites
+        all_favs = cloud_database.get_all_favorites()
+        # Lấy thêm bài từ Local Library (import thủ công)
+        local_songs = song_manager.get_all_songs()
+
+        # Gộp và filter theo query
+        songs = []
+        for s in all_favs:
+            if not query or query in s.get('title', '').lower() or query in s.get('artist', '').lower():
+                songs.append({"source": "cloud", **s})
+        for s in local_songs:
+            if not query or query in s.get('title', '').lower() or query in s.get('artist', '').lower():
+                songs.append({"source": "local", **s})
+
+        self._count_label.configure(
+            text=f"{len(songs)} bài — {len(all_favs)} từ Cloud, {len(local_songs)} import thủ công"
+        )
 
         if not songs:
             empty = ctk.CTkLabel(
-                self._list_frame, text="No songs in library.\nClick 'Import MIDI' or use the Search tab to add songs.",
-                font=T.FONT_BODY, text_color=T.TEXT_MUTED
+                self._list_frame,
+                text="Chưa có bài nào.\n\n"
+                     "Vào tab ☁ Search → tìm bài → bấm ❤ Yêu thích để lưu bài vào đây.",
+                font=T.FONT_BODY, text_color=T.TEXT_MUTED, justify="center"
             )
-            empty.pack(pady=40)
+            empty.pack(pady=60)
             self._song_widgets.append(empty)
             return
 
         for song in songs:
             row = self._create_song_row(song)
-            self._song_widgets.append(row)
+            if row:
+                self._song_widgets.append(row)
 
     def _create_song_row(self, song):
-        """Create a clickable row for a song."""
-        row = ctk.CTkFrame(self._list_frame, fg_color=T.BG_CARD, corner_radius=4, height=40)
-        row.pack(fill="x", padx=5, pady=2)
+        """Tạo một hàng hiển thị bài hát."""
+        is_fav = song.get("source") == "cloud"
+        local_path = song.get("local_path") or song.get("path", "")
+        if not local_path or not os.path.exists(local_path):
+            return None
+
+        row = ctk.CTkFrame(self._list_frame, fg_color=T.BG_CARD, corner_radius=6, height=52)
+        row.pack(fill="x", padx=5, pady=3)
         row.pack_propagate(False)
 
         inner = ctk.CTkFrame(row, fg_color="transparent")
-        inner.pack(fill="x", padx=8, pady=4)
+        inner.pack(fill="x", padx=12, pady=6)
 
-        # Title
-        title = song.get("title", "Unknown")
-        ctk.CTkLabel(inner, text=f"♪ {title}", font=T.FONT_SMALL, text_color=T.TEXT_PRIMARY,
-                      width=250, anchor="w").pack(side="left", padx=2)
+        # Icon yêu thích / local
+        icon = "❤" if is_fav else "📁"
+        ctk.CTkLabel(inner, text=icon, font=T.FONT_BODY,
+                      text_color="#f472b6" if is_fav else T.TEXT_MUTED).pack(side="left", padx=(0, 8))
 
-        # Note count
-        ctk.CTkLabel(inner, text=str(song.get("note_count", "—")), font=T.FONT_SMALL,
-                      text_color=T.TEXT_SECONDARY, width=60, anchor="w").pack(side="left", padx=2)
+        # Thông tin bài
+        info = ctk.CTkFrame(inner, fg_color="transparent")
+        info.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(info, text=song.get("title", "Unknown"), font=T.FONT_SMALL,
+                      text_color=T.TEXT_PRIMARY, anchor="w").pack(anchor="w")
+        artist = song.get("artist", "")
+        added = song.get("added_date", "")
+        sub = f"{artist}  •  Đã lưu: {added}" if artist else f"Đã lưu: {added}"
+        ctk.CTkLabel(info, text=sub, font=T.FONT_TINY,
+                      text_color=T.TEXT_MUTED, anchor="w").pack(anchor="w")
 
-        # Duration
-        dur = song.get("duration", 0)
-        mins, secs = divmod(int(dur), 60)
-        ctk.CTkLabel(inner, text=f"{mins}:{secs:02d}", font=T.FONT_SMALL,
-                      text_color=T.TEXT_SECONDARY, width=70, anchor="w").pack(side="left", padx=2)
-
-        # Tempo
-        ctk.CTkLabel(inner, text=f"{song.get('tempo_bpm', '—')}", font=T.FONT_SMALL,
-                      text_color=T.TEXT_SECONDARY, width=60, anchor="w").pack(side="left", padx=2)
-
-        # Added date
-        ctk.CTkLabel(inner, text=song.get("added_date", ""), font=T.FONT_TINY,
-                      text_color=T.TEXT_MUTED, width=100, anchor="w").pack(side="left", padx=2)
-
-        # Action buttons
+        # Nút Play
         ctk.CTkButton(
-            inner, text="▶", width=30, height=26, font=T.FONT_SMALL,
+            inner, text="▶", width=34, height=32, font=T.FONT_BODY_BOLD,
             fg_color=T.SUCCESS, hover_color="#16a34a", corner_radius=4,
             command=lambda s=song: self._play_song(s)
-        ).pack(side="right", padx=2)
+        ).pack(side="right", padx=(4, 0))
 
+        # Nút xóa
         ctk.CTkButton(
-            inner, text="✕", width=30, height=26, font=T.FONT_SMALL,
+            inner, text="✕", width=34, height=32, font=T.FONT_SMALL,
             fg_color=T.ERROR, hover_color="#dc2626", corner_radius=4,
-            command=lambda s=song: self._delete_song(s)
-        ).pack(side="right", padx=2)
+            command=lambda s=song: self._remove_song(s)
+        ).pack(side="right", padx=(4, 0))
 
-        # Hover effect
+        # Hover
         row.bind("<Enter>", lambda e, r=row: r.configure(fg_color=T.BG_CARD_HOVER))
         row.bind("<Leave>", lambda e, r=row: r.configure(fg_color=T.BG_CARD))
 
         return row
 
     def _play_song(self, song):
-        """Load song into player and switch to player tab."""
-        path = song.get("path", "")
+        """Load bài vào Player và chuyển sang tab Player."""
+        path = song.get("local_path") or song.get("path", "")
         if os.path.exists(path):
-            self.app.player_tab.load_file(path)
+            if hasattr(self.app, 'player_tab'):
+                self.app.player_tab.load_file(path)
             self.app.show_frame("player")
 
-    def _delete_song(self, song):
-        """Delete a song from the library."""
-        song_manager.delete_song(song["id"])
+    def _remove_song(self, song):
+        """Xóa bài khỏi danh sách (Favorites hoặc Local Library)."""
+        if song.get("source") == "cloud":
+            song_id = song.get("id", song.get("title", ""))
+            cloud_database.remove_favorite(song_id)
+        else:
+            song_manager.delete_song(song.get("id", ""))
         self._refresh_list()
 
     def _import_midi(self):
-        """Import MIDI files from disk."""
+        """Import MIDI file thủ công vào Local Library."""
         paths = filedialog.askopenfilenames(
             title="Import MIDI Files",
             filetypes=[("MIDI Files", "*.mid *.midi"), ("All Files", "*.*")]

@@ -1,115 +1,242 @@
+"""
+Cloud Database — Cloud-First MIDI catalog system.
+
+Luồng hoạt động:
+1. App kết nối Cloud URL (Github JSON) và tải danh sách bài hát (chỉ metadata, không tải file .mid).
+2. User search trên catalog Cloud.
+3. Khi user bấm Play: tải .mid về thư mục temp, chơi ngay, không lưu vào Library.
+4. Khi user bấm Yêu thích (❤): lưu bài đó vào Local Library (thư mục favorites/).
+"""
+
 import json
-import requests
 import os
+import tempfile
+import requests
 from pathlib import Path
 
-# Default cloud URL (User can change this in settings)
-# For demonstration, we provide a placeholder URL.
-DEFAULT_CLOUD_URL = "https://raw.githubusercontent.com/antigravity-mock/roblox-piano-cloud/main/database.json"
+# Default cloud URL — bạn có thể đổi thành link Github của riêng bạn trong Settings
+DEFAULT_CLOUD_URL = "https://raw.githubusercontent.com/LeHoanNguyenVu/Piano-Auto-Playing-tool/main/cloud_database.json"
 
-# Fallback mock data in case the URL is invalid or the user hasn't set one up yet.
-# This ensures the tool works out of the box for testing!
+# Fallback database dùng để test khi chưa có Cloud URL thật
 FALLBACK_DATABASE = [
     {
-        "id": "1",
-        "title": "Em Của Ngày Hôm Qua",
-        "artist": "Sơn Tùng M-TP",
-        "url": "https://bitmidi.com/uploads/85566.mid"  # Placeholder MIDI link
-    },
-    {
-        "id": "2",
+        "id": "demo_1",
         "title": "River Flows In You",
         "artist": "Yiruma",
-        "url": "https://bitmidi.com/uploads/15410.mid"  # Placeholder MIDI link
+        "url": "https://bitmidi.com/uploads/15410.mid"
     },
     {
-        "id": "3",
+        "id": "demo_2",
         "title": "Faded",
         "artist": "Alan Walker",
-        "url": "https://bitmidi.com/uploads/98711.mid"  # Placeholder MIDI link
+        "url": "https://bitmidi.com/uploads/98711.mid"
+    },
+    {
+        "id": "demo_3",
+        "title": "Fur Elise",
+        "artist": "Beethoven",
+        "url": "https://bitmidi.com/uploads/23281.mid"
     }
 ]
 
+# Thư mục lưu bài yêu thích (nằm trong library/favorites/)
+def _get_favorites_dir():
+    base = Path(__file__).parent / "favorites"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+# File lưu metadata yêu thích
+def _get_favorites_meta_path():
+    return Path(__file__).parent / "favorites.json"
+
+# File cấu hình cloud URL
+def _get_config_path():
+    config_dir = Path(os.environ.get('APPDATA', Path.home())) / 'RobloxPianoPlayer'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir / 'settings.json'
+
+
+def load_cloud_url():
+    """Load cloud URL từ cài đặt người dùng."""
+    try:
+        p = _get_config_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding='utf-8'))
+            return data.get('cloud_url', DEFAULT_CLOUD_URL)
+    except Exception:
+        pass
+    return DEFAULT_CLOUD_URL
+
+
+def save_cloud_url(url):
+    """Lưu cloud URL vào cài đặt người dùng."""
+    p = _get_config_path()
+    try:
+        data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+        data['cloud_url'] = url
+        p.write_text(json.dumps(data, indent=4), encoding='utf-8')
+    except Exception:
+        pass
+
+
+# ─── Favorites (Local Storage) ─────────────────────────────
+
+def load_favorites():
+    """Trả về dict {song_id: song_metadata} của các bài đã yêu thích."""
+    p = _get_favorites_meta_path()
+    try:
+        if p.exists():
+            return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_favorites(data: dict):
+    p = _get_favorites_meta_path()
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def is_favorite(song_id: str) -> bool:
+    return song_id in load_favorites()
+
+
+def add_favorite(song: dict, midi_path: str) -> dict:
+    """
+    Lưu bài hát vào danh sách yêu thích.
+    Sao chép file .mid từ midi_path vào thư mục favorites/.
+    Trả về metadata đã lưu.
+    """
+    import shutil, time as _time
+
+    favs = load_favorites()
+    song_id = song.get('id', song.get('title', 'unknown'))
+
+    # Sao chép file vào thư mục favorites
+    safe_title = "".join(c for c in song.get('title', 'song') if c.isalnum() or c in ' _-').strip()
+    dest = _get_favorites_dir() / f"{safe_title}.mid"
+    if not dest.exists():
+        shutil.copy2(midi_path, dest)
+
+    meta = {
+        **song,
+        "local_path": str(dest),
+        "added_date": _time.strftime("%Y-%m-%d %H:%M"),
+        "favorite": True
+    }
+    favs[song_id] = meta
+    _save_favorites(favs)
+    return meta
+
+
+def remove_favorite(song_id: str):
+    """Xóa bài hát khỏi danh sách yêu thích (và file .mid nếu có)."""
+    favs = load_favorites()
+    if song_id in favs:
+        local_path = favs[song_id].get('local_path', '')
+        try:
+            if local_path and os.path.exists(local_path):
+                os.remove(local_path)
+        except OSError:
+            pass
+        del favs[song_id]
+        _save_favorites(favs)
+
+
+def get_all_favorites() -> list:
+    """Trả về danh sách các bài yêu thích (chỉ những bài còn file trên máy)."""
+    favs = load_favorites()
+    valid = []
+    changed = False
+    for song_id, meta in list(favs.items()):
+        path = meta.get('local_path', '')
+        if path and os.path.exists(path):
+            valid.append(meta)
+        else:
+            # File bị xóa bên ngoài → dọn metadata
+            del favs[song_id]
+            changed = True
+    if changed:
+        _save_favorites(favs)
+    return valid
+
+
+# ─── Cloud Catalog ─────────────────────────────────────────
 
 class CloudDatabase:
     """
-    Handles fetching and searching a cloud-hosted JSON catalog of MIDI files.
+    Quản lý Cloud Catalog:
+    - Kết nối Github JSON khi app khởi động
+    - Hỗ trợ Search theo tên/nghệ sĩ
+    - Tải .mid tạm thời để Play
+    - Lưu vào Favorites nếu user thả tim
     """
+
     def __init__(self):
         self.catalog = []
-        self.cloud_url = DEFAULT_CLOUD_URL
-        self._load_config()
+        self.cloud_url = load_cloud_url()
+        self._connected = False
+        # Tải catalog ngầm — gọi refresh_catalog() để đồng bộ
         self.refresh_catalog()
 
-    def _load_config(self):
-        """Load the cloud URL from local settings if available."""
-        config_path = Path(os.environ.get('APPDATA', '')) / 'RobloxPianoPlayer' / 'settings.json'
-        try:
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.cloud_url = data.get('cloud_url', DEFAULT_CLOUD_URL)
-        except Exception:
-            pass
-
-    def save_config(self, new_url):
-        self.cloud_url = new_url
-        config_path = Path(os.environ.get('APPDATA', '')) / 'RobloxPianoPlayer' / 'settings.json'
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            data = {}
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            data['cloud_url'] = new_url
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-        except Exception:
-            pass
-
     def refresh_catalog(self):
-        """Fetch the latest catalog from the cloud URL."""
+        """Tải danh sách bài hát từ Cloud URL. Fallback nếu không kết nối được."""
         try:
-            # Try to fetch from the user's Github JSON URL
-            response = requests.get(self.cloud_url, timeout=5)
-            if response.status_code == 200:
-                self.catalog = response.json()
-            else:
-                self.catalog = FALLBACK_DATABASE
+            resp = requests.get(self.cloud_url, timeout=6)
+            if resp.status_code == 200:
+                self.catalog = resp.json()
+                self._connected = True
+                return True
         except Exception:
-            # If no internet or bad URL, use fallback so the user still sees something
-            self.catalog = FALLBACK_DATABASE
+            pass
+        # Không kết nối được → dùng fallback demo
+        self.catalog = list(FALLBACK_DATABASE)
+        self._connected = False
+        return False
 
-    def search(self, query):
-        """Search the loaded catalog for a query."""
-        if not query:
-            return self.catalog
+    @property
+    def is_connected(self):
+        return self._connected
 
-        query = query.lower()
-        results = []
-        for song in self.catalog:
-            title = song.get('title', '').lower()
-            artist = song.get('artist', '').lower()
-            if query in title or query in artist:
-                results.append(song)
-        return results
+    @property
+    def song_count(self):
+        return len(self.catalog)
 
-    def download_song(self, song, save_dir):
-        """Download a song from the cloud catalog to the local library."""
+    def search(self, query: str) -> list:
+        """Tìm kiếm theo tên bài hoặc nghệ sĩ (không phân biệt hoa thường)."""
+        if not query or not query.strip():
+            return list(self.catalog)
+        q = query.lower().strip()
+        return [
+            s for s in self.catalog
+            if q in s.get('title', '').lower() or q in s.get('artist', '').lower()
+        ]
+
+    def download_to_temp(self, song: dict) -> str:
+        """
+        Tải file .mid về thư mục temp của hệ thống để chơi thử.
+        Không lưu vào Library. Trả về đường dẫn file tạm.
+        """
         url = song.get('url')
         if not url:
-            raise ValueError("No download URL provided in cloud database.")
+            raise ValueError("Bài hát này không có link tải.")
 
-        # Clean filename
-        safe_title = "".join([c for c in song['title'] if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-        filename = f"{safe_title}.mid"
-        save_path = Path(save_dir) / filename
+        safe_title = "".join(c for c in song.get('title', 'song') if c.isalnum() or c in ' _-').strip()
+        tmp_path = Path(tempfile.gettempdir()) / f"piano_tmp_{safe_title}.mid"
 
-        response = requests.get(url, stream=True, timeout=10)
-        response.raise_for_status()
-
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
+        resp = requests.get(url, stream=True, timeout=15)
+        resp.raise_for_status()
+        with open(tmp_path, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)
-                
-        return str(save_path)
+        return str(tmp_path)
+
+    def download_to_favorites(self, song: dict) -> dict:
+        """
+        Tải bài hát về máy và lưu thẳng vào Favorites.
+        Trả về metadata đã lưu.
+        """
+        # Tải về temp trước
+        tmp_path = self.download_to_temp(song)
+        # Sau đó lưu vào favorites/
+        return add_favorite(song, tmp_path)
