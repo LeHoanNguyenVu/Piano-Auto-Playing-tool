@@ -155,40 +155,48 @@ class PlaybackEngine:
 
         # ── Main playback ─────────────────────────────────────
         start_time = time.perf_counter()
-        pause_offset = 0.0
         idx = 0
-
         while idx < total_events:
-            if self._stop_event.is_set():
-                break
-
-            # Handle pause
-            if not self._pause_event.is_set():
-                pause_start = time.perf_counter()
-                self._pause_event.wait()
-                pause_offset += time.perf_counter() - pause_start
-                if self._stop_event.is_set():
-                    break
-                start_time = time.perf_counter() - (events[idx].time / speed) + pause_offset
-                pause_offset = 0
-
-            # Calculate target time for this event
-            target_time = start_time + (events[idx].time / speed)
-            now = time.perf_counter()
-
-            # Wait until target time (spin-wait for precision in last 1ms)
-            wait_time = target_time - now
-            if wait_time > 0.002:
-                time.sleep(wait_time - 0.001)
-            while time.perf_counter() < target_time:
-                pass  # Spin-wait for sub-millisecond precision
-
             if self._stop_event.is_set():
                 break
 
             # Process current event
             event = events[idx]
-            
+            target_time = start_time + (event.time / speed)
+
+            # Wait until target time (responsive to pause/stop)
+            while True:
+                if self._stop_event.is_set():
+                    break
+                
+                # Handle pause
+                if not self._pause_event.is_set():
+                    pause_start = time.perf_counter()
+                    release_all()
+                    self._pause_event.wait()
+                    # Shift start_time by the duration of the pause
+                    start_time += time.perf_counter() - pause_start
+                    target_time = start_time + (event.time / speed)
+
+                now = time.perf_counter()
+                wait_time = target_time - now
+                
+                if wait_time <= 0:
+                    break
+                
+                # Sleep in small increments to remain responsive, or spin-wait for precision
+                if wait_time > 0.005:
+                    time.sleep(min(wait_time - 0.002, 0.01))
+                else:
+                    # Final precision spin-wait
+                    while time.perf_counter() < target_time and self._pause_event.is_set() and not self._stop_event.is_set():
+                        pass
+                    break
+
+            if self._stop_event.is_set():
+                break
+
+            # Execute event
             note = event.note
             if self.auto_clamp:
                 note = clamp_to_range(note, transpose)

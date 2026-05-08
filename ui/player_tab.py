@@ -218,7 +218,7 @@ class PlayerTab(ctk.CTkFrame):
         self._console.configure(state="disabled")
 
         self._log("Ready. Open a MIDI file or select from Library.")
-        self._log("Hotkeys: F1 = Start | F2 = Pause | F3 = Stop")
+        self._log("Hotkeys: F5 = Play | F6 = Pause/Resume | F7 = Stop")
 
     # ─── File Operations ──────────────────────────────────
     def _open_file(self):
@@ -310,9 +310,12 @@ class PlayerTab(ctk.CTkFrame):
             self._status_label.configure(text="Playing", text_color=T.SUCCESS)
 
     def _pause(self):
-        if self.engine.is_playing and not self.engine.is_paused:
-            self.engine.pause()
-            self._status_label.configure(text="Paused", text_color=T.WARNING)
+        if self.engine.is_playing:
+            self.engine.toggle_pause()
+            if self.engine.is_paused:
+                self._status_label.configure(text="Paused", text_color=T.WARNING)
+            else:
+                self._status_label.configure(text="Playing", text_color=T.SUCCESS)
 
     def _stop(self):
         self.engine.stop()

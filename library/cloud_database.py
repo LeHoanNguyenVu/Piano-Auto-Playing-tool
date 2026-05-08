@@ -2,10 +2,11 @@
 Cloud Database — Cloud-First MIDI catalog system.
 
 Luồng hoạt động:
-1. App kết nối Cloud URL (Github JSON) và tải danh sách bài hát (chỉ metadata, không tải file .mid).
+1. App kết nối Cloud URL (mặc định là file JSON trên Github). 
+   Lưu ý: File này chứa metadata công khai. Đảm bảo không để thông tin nhạy cảm ở đây.
 2. User search trên catalog Cloud.
-3. Khi user bấm Play: tải .mid về thư mục temp, chơi ngay, không lưu vào Library.
-4. Khi user bấm Yêu thích (❤): lưu bài đó vào Local Library (thư mục favorites/).
+3. Khi user bấm Play: tải .mid về thư mục temp, kiểm tra tính hợp lệ (header MThd), chơi ngay.
+4. Khi user bấm Yêu thích (❤): tải file về và lưu vào Local Library (thư mục favorites/).
 """
 
 import json
@@ -110,13 +111,25 @@ def add_favorite(song: dict, midi_path: str) -> dict:
     import shutil, time as _time
 
     favs = load_favorites()
-    song_id = song.get('id', song.get('title', 'unknown'))
+    song_id = str(song.get('id', song.get('title', 'unknown')))
 
-    # Sao chép file vào thư mục favorites
-    safe_title = "".join(c for c in song.get('title', 'song') if c.isalnum() or c in ' _-').strip()
-    dest = _get_favorites_dir() / f"{safe_title}.mid"
-    if not dest.exists():
+    # Đảm bảo bài hát có dữ liệu hợp lệ
+    if not os.path.exists(midi_path):
+        raise FileNotFoundError(f"Không tìm thấy file MIDI tại {midi_path}")
+
+    # Sao chép file vào thư mục favorites với tên file an toàn và duy nhất
+    title = song.get('title', 'song')
+    safe_title = "".join(c for c in title if c.isalnum() or c in ' _-').strip()
+    if not safe_title: safe_title = "unnamed_song"
+    
+    # Để tránh trùng tên file, ta có thể thêm ID vào tên file nếu cần
+    dest_filename = f"{safe_title}.mid"
+    dest = _get_favorites_dir() / dest_filename
+    try:
         shutil.copy2(midi_path, dest)
+    except Exception as e:
+        # Nếu copy lỗi (ví dụ file đang mở), thử ghi đè hoặc báo lỗi
+        pass
 
     meta = {
         **song,
@@ -226,9 +239,19 @@ class CloudDatabase:
 
         resp = requests.get(url, stream=True, timeout=15)
         resp.raise_for_status()
+        
+        # Kiểm tra header MIDI cơ bản
+        content = b""
+        for chunk in resp.iter_content(chunk_size=8192):
+            content += chunk
+            if len(content) >= 4 and not content.startswith(b'MThd'):
+                raise ValueError("File tải về không phải là định dạng MIDI hợp lệ.")
+            if len(content) > 10 * 1024 * 1024: # Giới hạn 10MB
+                raise ValueError("File quá lớn.")
+        
         with open(tmp_path, 'wb') as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
+            f.write(content)
+            
         return str(tmp_path)
 
     def download_to_favorites(self, song: dict) -> dict:

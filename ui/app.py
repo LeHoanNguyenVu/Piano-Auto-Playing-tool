@@ -14,9 +14,9 @@ from ui.settings_tab import SettingsTab
 
 
 # Win32 Virtual Key codes for hotkeys
-VK_F1 = 0x70
-VK_F2 = 0x71
-VK_F3 = 0x72
+VK_F5 = 0x74
+VK_F6 = 0x75
+VK_F7 = 0x76
 
 
 class App(ctk.CTk):
@@ -116,9 +116,11 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(hint_frame, text="Hotkeys", font=T.FONT_TINY,
                       text_color=T.TEXT_MUTED).pack(anchor="w")
-        ctk.CTkLabel(hint_frame, text="F5  Play/Pause", font=T.FONT_TINY,
+        ctk.CTkLabel(hint_frame, text="F5  Play", font=T.FONT_TINY,
                       text_color=T.TEXT_ACCENT).pack(anchor="w")
-        ctk.CTkLabel(hint_frame, text="F6  Stop", font=T.FONT_TINY,
+        ctk.CTkLabel(hint_frame, text="F6  Pause/Resume", font=T.FONT_TINY,
+                      text_color=T.TEXT_ACCENT).pack(anchor="w")
+        ctk.CTkLabel(hint_frame, text="F7  Stop", font=T.FONT_TINY,
                       text_color=T.TEXT_ACCENT).pack(anchor="w")
 
     def show_frame(self, name):
@@ -145,46 +147,46 @@ class App(ctk.CTk):
     def _hotkey_listener(self):
         """Poll for global hotkeys using GetAsyncKeyState (runs on background thread)."""
         user32 = ctypes.windll.user32
-        prev_f1 = False
-        prev_f2 = False
-        prev_f3 = False
+        prev_f5 = False
+        prev_f6 = False
+        prev_f7 = False
 
         while True:
             try:
-                # F1 - Start
-                state = user32.GetAsyncKeyState(VK_F1) & 0x8000
-                if state and not prev_f1:
+                # F5 - Play
+                state = user32.GetAsyncKeyState(VK_F5) & 0x8000
+                if state and not prev_f5:
                     self.after(0, self._hotkey_start)
-                prev_f1 = bool(state)
+                prev_f5 = bool(state)
 
-                # F2 - Pause
-                state = user32.GetAsyncKeyState(VK_F2) & 0x8000
-                if state and not prev_f2:
+                # F6 - Pause/Resume
+                state = user32.GetAsyncKeyState(VK_F6) & 0x8000
+                if state and not prev_f6:
                     self.after(0, self._hotkey_pause)
-                prev_f2 = bool(state)
+                prev_f6 = bool(state)
 
-                # F3 - Stop
-                state = user32.GetAsyncKeyState(VK_F3) & 0x8000
-                if state and not prev_f3:
+                # F7 - Stop
+                state = user32.GetAsyncKeyState(VK_F7) & 0x8000
+                if state and not prev_f7:
                     self.after(0, self._hotkey_stop)
-                prev_f3 = bool(state)
+                prev_f7 = bool(state)
 
                 time.sleep(0.010)  # 100Hz polling for responsiveness
             except Exception:
                 time.sleep(0.05)
 
     def _hotkey_start(self):
-        """F1 pressed — start playback."""
+        """F5 pressed — start playback."""
         if hasattr(self, 'player_tab'):
             self.player_tab._play()
 
     def _hotkey_pause(self):
-        """F2 pressed — pause playback."""
+        """F6 pressed — pause/resume playback."""
         if hasattr(self, 'player_tab'):
             self.player_tab._pause()
 
     def _hotkey_stop(self):
-        """F3 pressed — stop playback."""
+        """F7 pressed — stop playback."""
         if hasattr(self, 'player_tab'):
             self.player_tab._stop()
 
