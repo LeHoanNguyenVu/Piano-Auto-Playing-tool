@@ -185,10 +185,22 @@ def get_all_favorites() -> list:
 
 from supabase import create_client, Client
 
-# Supabase Configuration
-# BẠN CẦN ĐIỀN THÔNG TIN TỪ BƯỚC 3 VÀO ĐÂY:
-SUPABASE_URL = "https://kwesvkdggikpwcwldndn.supabase.co"
-SUPABASE_KEY = "sb_publishable_vsANwYlN5txMx6LCf2Twbg_qFlg8BAL"
+def load_env():
+    """Đọc file .env để lấy thông tin bảo mật."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    env_vars[k.strip()] = v.strip().strip('"').strip("'")
+    return env_vars
+
+# Load configuration
+ENV = load_env()
+SUPABASE_URL = ENV.get("SUPABASE_URL", "https://your-project-id.supabase.co")
+SUPABASE_KEY = ENV.get("SUPABASE_KEY", "your-anon-key")
 
 class CloudDatabase:
     """

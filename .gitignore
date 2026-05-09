@@ -24,3 +24,5 @@ library/favorites/
 library/favorites.json
 library/library.json
 settings.json
+upload_queue/
+library/.env
