@@ -57,6 +57,21 @@ class PlaybackEngine:
     def is_paused(self):
         return self._is_paused
 
+    @property
+    def events(self):
+        return self._events
+
+    @property
+    def current_index(self):
+        return self._current_index
+
+    @property
+    def current_time(self):
+        """Return current playback time based on the event index."""
+        if self._events and 0 < self._current_index <= len(self._events):
+            return self._events[self._current_index - 1].time
+        return 0.0
+
     def load(self, events):
         """Load a list of NoteEvent objects for playback."""
         # Include both note_on (velocity > 0) and note_off (velocity == 0) events

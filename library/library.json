@@ -1,18 +1,3 @@
 {
-  "songs": [
-    {
-      "id": "1fab0a17",
-      "title": "Unravel - Tokyo Ghoul",
-      "artist": "Unknown",
-      "filename": "1fab0a17_Tokyo_Ghoul_Unravel_Fingerstyle.mid",
-      "path": "C:\\Users\\Admin\\Desktop\\Piano Tool\\library\\songs\\1fab0a17_Tokyo_Ghoul_Unravel_Fingerstyle.mid",
-      "duration": 252.9,
-      "note_count": 2015,
-      "tempo_bpm": 130,
-      "track_count": 2,
-      "difficulty": "",
-      "genre": "",
-      "added_date": "2026-05-09 00:22"
-    }
-  ]
+  "songs": []
 }

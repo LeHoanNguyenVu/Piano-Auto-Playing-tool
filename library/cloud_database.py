@@ -235,15 +235,27 @@ class CloudDatabase:
     def song_count(self):
         return len(self.catalog)
 
+    def _remove_accents(self, s):
+        """Loại bỏ dấu tiếng Việt để tìm kiếm linh hoạt."""
+        import unicodedata
+        if not s: return ""
+        s = unicodedata.normalize('NFD', str(s))
+        s = ''.join([c for c in s if unicodedata.category(c) != 'Mn'])
+        return s.replace('đ', 'd').replace('Đ', 'D').lower()
+
     def search(self, query: str) -> list:
-        """Tìm kiếm trong catalog hiện tại."""
+        """Tìm kiếm thông minh: không phân biệt hoa thường, không phân biệt dấu."""
         if not query or not query.strip():
             return list(self.catalog)
-        q = query.lower().strip()
-        return [
-            s for s in self.catalog
-            if q in str(s.get('title', '')).lower() or q in str(s.get('artist', '')).lower()
-        ]
+        
+        q = self._remove_accents(query)
+        results = []
+        for s in self.catalog:
+            title = self._remove_accents(s.get('title', ''))
+            artist = self._remove_accents(s.get('artist', ''))
+            if q in title or q in artist:
+                results.append(s)
+        return results
 
     def download_to_temp(self, song: dict) -> str:
         """Tải file .mid về thư mục temp."""
@@ -272,3 +284,39 @@ class CloudDatabase:
         """Tải và lưu vào Favorites."""
         tmp_path = self.download_to_temp(song)
         return add_favorite(song, tmp_path)
+
+    def increment_play_count(self, song_id):
+        """Tăng lượt chơi của bài hát trên Supabase."""
+        if not self.supabase or not self._connected:
+            return
+            
+        try:
+            # Chuyển ID sang int để khớp với cột int8 của Supabase
+            sid = int(song_id)
+            self.supabase.rpc('increment_play_count', {'row_id': sid}).execute()
+        except Exception:
+            try:
+                sid = int(song_id)
+                res = self.supabase.table("songs_catalog").select("play_count").eq("id", sid).execute()
+                if res.data:
+                    current = res.data[0].get('play_count', 0) or 0
+                    self.supabase.table("songs_catalog").update({"play_count": current + 1}).eq("id", sid).execute()
+            except Exception as e:
+                print(f"Lỗi tăng lượt chơi: {e}")
+
+    def get_trending_songs(self, limit=20):
+        """Lấy danh sách bài hát có lượt chơi cao nhất."""
+        if not self.supabase or not self._connected:
+            # Fallback nếu không có kết nối: trả về catalog hiện tại sắp xếp theo tên
+            return sorted(self.catalog, key=lambda x: x.get('title', ''))[:limit]
+            
+        try:
+            res = self.supabase.table("songs_catalog")\
+                .select("*")\
+                .order("play_count", desc=True)\
+                .limit(limit)\
+                .execute()
+            return res.data if res.data else []
+        except Exception as e:
+            print(f"Lỗi lấy xu hướng: {e}")
+            return []

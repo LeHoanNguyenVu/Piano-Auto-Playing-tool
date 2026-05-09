@@ -10,6 +10,7 @@ from ui import theme as T
 from ui.player_tab import PlayerTab
 from ui.library_tab import LibraryTab
 from ui.search_tab import SearchTab
+from ui.trends_tab import TrendsTab
 from ui.settings_tab import SettingsTab
 
 
@@ -24,6 +25,14 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
+        
+        # Load initial config
+        from ui.settings_tab import load_config
+        self.config = load_config()
+        
+        # Set theme and language
+        T.theme.set_theme(self.config.get("theme", "Dark"))
+        T.lang.set_lang(self.config.get("language", "vi"))
 
         # ── Window setup ──────────────────────────────────
         self.title("RobloxPianoPlayer")
@@ -31,9 +40,8 @@ class App(ctk.CTk):
         self.minsize(800, 500)
         self.configure(fg_color=T.BG_DARK)
 
-        # Try to set dark title bar on Windows
         try:
-            self.wm_attributes("-topmost", True)
+            self.wm_attributes("-topmost", self.config.get("always_on_top", True))
         except Exception:
             pass
 
@@ -53,12 +61,14 @@ class App(ctk.CTk):
         self.player_tab = PlayerTab(self.content, self)
         self.library_tab = LibraryTab(self.content, self)
         self.search_tab = SearchTab(self.content, self)
+        self.trends_tab = TrendsTab(self.content, self)
         self.settings_tab = SettingsTab(self.content, self)
 
         self._frames = {
             "player": self.player_tab,
             "library": self.library_tab,
             "search": self.search_tab,
+            "trends": self.trends_tab,
             "settings": self.settings_tab,
         }
 
@@ -69,7 +79,6 @@ class App(ctk.CTk):
         self._hotkey_thread = threading.Thread(target=self._hotkey_listener, daemon=True)
         self._hotkey_thread.start()
 
-        # ── Handle close ──────────────────────────────────
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_sidebar(self):
@@ -78,7 +87,7 @@ class App(ctk.CTk):
         sidebar.grid_propagate(False)
         sidebar.grid_rowconfigure(6, weight=1)
 
-        # Logo / Title
+        # Logo
         logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
         logo_frame.grid(row=0, column=0, padx=10, pady=(18, 20), sticky="ew")
 
@@ -93,10 +102,11 @@ class App(ctk.CTk):
         # Navigation buttons
         self._nav_buttons = {}
         nav_items = [
-            ("player", "🎹  Player", 1),
-            ("library", "📚  Library", 2),
-            ("search", "🌐  Search", 3),
-            ("settings", "⚙  Settings", 4),
+            ("player", "🎹  " + T.L("player"), 1),
+            ("library", "📚  " + T.L("library"), 2),
+            ("search", "🌐  " + T.L("search"), 3),
+            ("trends", "🔥  " + T.L("trends"), 4),
+            ("settings", "⚙  " + T.L("settings"), 5),
         ]
 
         for name, text, row in nav_items:
@@ -110,18 +120,13 @@ class App(ctk.CTk):
             btn.grid(row=row, column=0, sticky="ew", padx=0)
             self._nav_buttons[name] = btn
 
-        # Hotkey hint at bottom
+        # Hotkeys hint — clean, no duplicate icons
         hint_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
         hint_frame.grid(row=7, column=0, sticky="sew", padx=10, pady=10)
-
-        ctk.CTkLabel(hint_frame, text="Hotkeys", font=T.FONT_TINY,
-                      text_color=T.TEXT_MUTED).pack(anchor="w")
-        ctk.CTkLabel(hint_frame, text="F5  Play", font=T.FONT_TINY,
-                      text_color=T.TEXT_ACCENT).pack(anchor="w")
-        ctk.CTkLabel(hint_frame, text="F6  Pause/Resume", font=T.FONT_TINY,
-                      text_color=T.TEXT_ACCENT).pack(anchor="w")
-        ctk.CTkLabel(hint_frame, text="F7  Stop", font=T.FONT_TINY,
-                      text_color=T.TEXT_ACCENT).pack(anchor="w")
+        ctk.CTkLabel(hint_frame, text=T.L("hotkeys"), font=T.FONT_TINY, text_color=T.TEXT_MUTED).pack(anchor="w")
+        ctk.CTkLabel(hint_frame, text="F5  " + T.L("play"), font=T.FONT_TINY, text_color=T.TEXT_ACCENT).pack(anchor="w")
+        ctk.CTkLabel(hint_frame, text="F6  " + T.L("pause"), font=T.FONT_TINY, text_color=T.TEXT_ACCENT).pack(anchor="w")
+        ctk.CTkLabel(hint_frame, text="F7  " + T.L("stop"), font=T.FONT_TINY, text_color=T.TEXT_ACCENT).pack(anchor="w")
 
     def show_frame(self, name):
         """Switch to a tab by name."""
@@ -129,71 +134,71 @@ class App(ctk.CTk):
             return
 
         self._current_page = name
-
-        # Hide all frames
         for frame in self._frames.values():
             frame.grid_forget()
 
-        # Show selected frame
+        if name == "trends" and hasattr(self, 'trends_tab'):
+            self.trends_tab._load_trends()
+
         self._frames[name].grid(row=0, column=0, sticky="nsew")
 
-        # Update nav button styles
         for btn_name, btn in self._nav_buttons.items():
             if btn_name == name:
                 btn.configure(fg_color=T.SIDEBAR_BTN_ACTIVE, text_color=T.TEXT_PRIMARY)
             else:
                 btn.configure(fg_color="transparent", text_color=T.TEXT_SECONDARY)
 
-    def _hotkey_listener(self):
-        """Poll for global hotkeys using GetAsyncKeyState (runs on background thread)."""
-        user32 = ctypes.windll.user32
-        prev_f5 = False
-        prev_f6 = False
-        prev_f7 = False
+    def refresh_theme(self):
+        """Rebuild everything for theme or language change."""
+        self.configure(fg_color=T.BG_DARK)
+        self.content.configure(fg_color=T.PLAYER_BG)
+        for w in self.grid_slaves(column=0):
+            w.destroy()
+        self._build_sidebar()
+        old_page = self._current_page
+        for f in self._frames.values():
+            f.destroy()
+        self.player_tab = PlayerTab(self.content, self)
+        self.library_tab = LibraryTab(self.content, self)
+        self.search_tab = SearchTab(self.content, self)
+        self.trends_tab = TrendsTab(self.content, self)
+        self.settings_tab = SettingsTab(self.content, self)
+        self._frames = {
+            "player": self.player_tab,
+            "library": self.library_tab,
+            "search": self.search_tab,
+            "trends": self.trends_tab,
+            "settings": self.settings_tab,
+        }
+        self._current_page = None
+        self.show_frame(old_page or "player")
 
+    def _hotkey_listener(self):
+        user32 = ctypes.windll.user32
+        prev_f5, prev_f6, prev_f7 = False, False, False
         while True:
             try:
-                # F5 - Play
-                state = user32.GetAsyncKeyState(VK_F5) & 0x8000
-                if state and not prev_f5:
-                    self.after(0, self._hotkey_start)
-                prev_f5 = bool(state)
-
-                # F6 - Pause/Resume
-                state = user32.GetAsyncKeyState(VK_F6) & 0x8000
-                if state and not prev_f6:
-                    self.after(0, self._hotkey_pause)
-                prev_f6 = bool(state)
-
-                # F7 - Stop
-                state = user32.GetAsyncKeyState(VK_F7) & 0x8000
-                if state and not prev_f7:
-                    self.after(0, self._hotkey_stop)
-                prev_f7 = bool(state)
-
-                time.sleep(0.010)  # 100Hz polling for responsiveness
+                s5 = user32.GetAsyncKeyState(VK_F5) & 0x8000
+                if s5 and not prev_f5: self.after(0, self._hotkey_start)
+                prev_f5 = bool(s5)
+                s6 = user32.GetAsyncKeyState(VK_F6) & 0x8000
+                if s6 and not prev_f6: self.after(0, self._hotkey_pause)
+                prev_f6 = bool(s6)
+                s7 = user32.GetAsyncKeyState(VK_F7) & 0x8000
+                if s7 and not prev_f7: self.after(0, self._hotkey_stop)
+                prev_f7 = bool(s7)
+                time.sleep(0.010)
             except Exception:
                 time.sleep(0.05)
 
     def _hotkey_start(self):
-        """F5 pressed — start playback."""
-        if hasattr(self, 'player_tab'):
-            self.player_tab._play()
-
+        if hasattr(self, 'player_tab'): self.player_tab._play()
     def _hotkey_pause(self):
-        """F6 pressed — pause/resume playback."""
-        if hasattr(self, 'player_tab'):
-            self.player_tab._pause()
-
+        if hasattr(self, 'player_tab'): self.player_tab._pause()
     def _hotkey_stop(self):
-        """F7 pressed — stop playback."""
-        if hasattr(self, 'player_tab'):
-            self.player_tab._stop()
+        if hasattr(self, 'player_tab'): self.player_tab._stop()
 
     def _on_close(self):
-        """Clean shutdown."""
-        try:
-            self.player_tab.engine.stop()
-        except Exception:
-            pass
+        try: self.player_tab.engine.stop()
+        except Exception: pass
         self.destroy()

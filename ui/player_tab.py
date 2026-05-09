@@ -3,10 +3,11 @@ Player Tab — Main MIDI player interface with controls, progress, and console l
 """
 
 import os
+import threading
 import customtkinter as ctk
 from tkinter import filedialog
 from ui import theme as T
-from core.midi_parser import parse_midi, get_song_info, get_piano_tracks
+from core.midi_parser import parse_midi, get_song_info
 from core.playback_engine import PlaybackEngine
 from core.key_mapping import get_note_name
 
@@ -19,6 +20,7 @@ class PlayerTab(ctk.CTkFrame):
         self.app = app
         self.engine = PlaybackEngine()
         self._current_file = None
+        self._current_song_id = None
         self._song_info = None
 
         # Wire engine callbacks
@@ -35,10 +37,10 @@ class PlayerTab(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(20, 10))
 
-        ctk.CTkLabel(header, text="🎹 MIDI Player", font=T.FONT_TITLE,
+        ctk.CTkLabel(header, text="🎹 " + T.L("player"), font=T.FONT_TITLE,
                       text_color=T.TEXT_PRIMARY).pack(side="left")
 
-        self._status_label = ctk.CTkLabel(header, text="No file loaded",
+        self._status_label = ctk.CTkLabel(header, text="...",
                                            font=T.FONT_SMALL, text_color=T.TEXT_MUTED)
         self._status_label.pack(side="right")
 
@@ -56,7 +58,7 @@ class PlayerTab(ctk.CTkFrame):
         self._file_label.pack(side="left", fill="x", expand=True)
 
         ctk.CTkButton(
-            file_inner, text="📂 Open MIDI", width=120, height=32,
+            file_inner, text=T.L("open_midi"), width=120, height=32,
             font=T.FONT_BODY_BOLD, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             corner_radius=T.BUTTON_CORNER, command=self._open_file
         ).pack(side="right", padx=(10, 0))
@@ -69,323 +71,257 @@ class PlayerTab(ctk.CTkFrame):
         info_inner.pack(fill="x", padx=15, pady=10)
 
         self._info_labels = {}
-        for col, key in enumerate(["Duration", "Notes", "Tempo", "Range"]):
+        info_keys = [("duration", "Duration"), ("notes", "Notes"), ("tempo", "Tempo"), ("range", "Range")]
+        for key_id, display_fallback in info_keys:
             frame = ctk.CTkFrame(info_inner, fg_color="transparent")
             frame.pack(side="left", expand=True, fill="x")
-            ctk.CTkLabel(frame, text=key, font=T.FONT_TINY, text_color=T.TEXT_MUTED).pack()
+            ctk.CTkLabel(frame, text=T.L(key_id), font=T.FONT_TINY, text_color=T.TEXT_MUTED).pack()
             lbl = ctk.CTkLabel(frame, text="—", font=T.FONT_BODY_BOLD, text_color=T.TEXT_PRIMARY)
             lbl.pack()
-            self._info_labels[key] = lbl
+            self._info_labels[display_fallback] = lbl
 
-        # ─── Track Selection ─────────────────────────────
-        self._track_frame = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
-        # Hidden by default, shown when file has multiple tracks
-
-        track_inner = ctk.CTkFrame(self._track_frame, fg_color="transparent")
-        track_inner.pack(fill="x", padx=15, pady=10)
-
-        ctk.CTkLabel(track_inner, text="Track:", font=T.FONT_SMALL,
-                      text_color=T.TEXT_SECONDARY).pack(side="left")
-        self._track_var = ctk.StringVar(value="All Tracks")
-        self._track_menu = ctk.CTkOptionMenu(
-            track_inner, variable=self._track_var, values=["All Tracks"],
-            width=250, height=28, font=T.FONT_SMALL,
-            fg_color=T.BG_ELEVATED, button_color=T.ACCENT, button_hover_color=T.ACCENT_HOVER,
-            command=self._on_track_change
-        )
-        self._track_menu.pack(side="left", padx=(10, 0))
+        # ─── Piano Roll ───────────────────────────────────
+        self._canvas_frame = ctk.CTkFrame(self, fg_color=T.BG_DARKEST, corner_radius=T.CORNER_RADIUS)
+        self._canvas_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        self._canvas = ctk.CTkCanvas(self._canvas_frame, bg=T.BG_DARKEST, highlightthickness=0, bd=0)
+        self._canvas.pack(fill="both", expand=True, padx=5, pady=5)
+        self._canvas.bind("<Configure>", lambda e: self._draw_piano_grid())
 
         # ─── Progress Bar ─────────────────────────────────
         progress_frame = ctk.CTkFrame(self, fg_color="transparent")
         progress_frame.pack(fill="x", padx=20, pady=(0, 5))
-
-        self._progress_bar = ctk.CTkProgressBar(
-            progress_frame, height=6, corner_radius=3,
-            fg_color=T.PROGRESS_BG, progress_color=T.ACCENT
-        )
+        self._progress_bar = ctk.CTkProgressBar(progress_frame, height=6, corner_radius=3,
+                                                fg_color=T.PROGRESS_BG, progress_color=T.ACCENT)
         self._progress_bar.pack(fill="x")
         self._progress_bar.set(0)
 
         time_frame = ctk.CTkFrame(self, fg_color="transparent")
         time_frame.pack(fill="x", padx=20, pady=(0, 10))
-
-        self._time_current = ctk.CTkLabel(time_frame, text="0:00", font=T.FONT_TINY,
-                                           text_color=T.TEXT_MUTED)
+        self._time_current = ctk.CTkLabel(time_frame, text="0:00", font=T.FONT_TINY, text_color=T.TEXT_MUTED)
         self._time_current.pack(side="left")
-        self._time_total = ctk.CTkLabel(time_frame, text="0:00", font=T.FONT_TINY,
-                                         text_color=T.TEXT_MUTED)
+        self._time_total = ctk.CTkLabel(time_frame, text="0:00", font=T.FONT_TINY, text_color=T.TEXT_MUTED)
         self._time_total.pack(side="right")
-        self._notes_progress = ctk.CTkLabel(time_frame, text="", font=T.FONT_TINY,
-                                             text_color=T.TEXT_ACCENT)
+        self._notes_progress = ctk.CTkLabel(time_frame, text="", font=T.FONT_TINY, text_color=T.TEXT_ACCENT)
         self._notes_progress.pack()
 
-        # ─── Playback Controls ────────────────────────────
+        # ─── Controls — single compact row ────────────────
         controls = ctk.CTkFrame(self, fg_color=T.BG_CARD, corner_radius=T.CORNER_RADIUS)
-        controls.pack(fill="x", padx=20, pady=(0, 10))
+        controls.pack(fill="x", padx=20, pady=(0, 15))
+        ctrl = ctk.CTkFrame(controls, fg_color="transparent")
+        ctrl.pack(fill="x", padx=8, pady=8)
 
-        ctrl_inner = ctk.CTkFrame(controls, fg_color="transparent")
-        ctrl_inner.pack(pady=12)
+        # Play / Pause / Stop — compact buttons
+        btn_s = dict(height=30, font=T.FONT_SMALL, corner_radius=T.BUTTON_CORNER)
+        self._play_btn = ctk.CTkButton(ctrl, text="▶", fg_color=T.SUCCESS, command=self._play, width=40, **btn_s)
+        self._play_btn.pack(side="left", padx=1)
+        self._pause_btn = ctk.CTkButton(ctrl, text="⏸", fg_color=T.WARNING, command=self._pause, width=40, **btn_s)
+        self._pause_btn.pack(side="left", padx=1)
+        self._stop_btn = ctk.CTkButton(ctrl, text="⏹", fg_color=T.ERROR, command=self._stop, width=40, **btn_s)
+        self._stop_btn.pack(side="left", padx=(1, 8))
 
-        btn_style = dict(width=80, height=36, font=T.FONT_BODY_BOLD,
-                         corner_radius=T.BUTTON_CORNER)
+        # Separator
+        ctk.CTkFrame(ctrl, width=1, height=22, fg_color=T.BORDER).pack(side="left", padx=4)
 
-        self._play_btn = ctk.CTkButton(
-            ctrl_inner, text="▶  Play", fg_color=T.SUCCESS,
-            hover_color="#16a34a", command=self._play, **btn_style
-        )
-        self._play_btn.pack(side="left", padx=5)
+        # Delay
+        ctk.CTkLabel(ctrl, text="⏱", font=T.FONT_TINY, text_color=T.TEXT_MUTED).pack(side="left", padx=(4, 2))
+        init_delay = str(self.app.config.get("start_delay", 3.0))
+        self._delay_var = ctk.StringVar(value=init_delay)
+        self._delay_entry = ctk.CTkEntry(ctrl, textvariable=self._delay_var, width=36, height=24,
+                                          font=T.FONT_TINY, fg_color=T.BG_ELEVATED, border_color=T.ACCENT_DIM)
+        self._delay_entry.pack(side="left", padx=(0, 6))
+        self._delay_entry.bind("<Return>", self._on_delay_confirm)
 
-        self._pause_btn = ctk.CTkButton(
-            ctrl_inner, text="⏸  Pause", fg_color=T.WARNING,
-            hover_color="#d97706", command=self._pause, **btn_style
-        )
-        self._pause_btn.pack(side="left", padx=5)
+        # Separator
+        ctk.CTkFrame(ctrl, width=1, height=22, fg_color=T.BORDER).pack(side="left", padx=4)
 
-        self._stop_btn = ctk.CTkButton(
-            ctrl_inner, text="⏹  Stop", fg_color=T.ERROR,
-            hover_color="#dc2626", command=self._stop, **btn_style
-        )
-        self._stop_btn.pack(side="left", padx=5)
-
-        # Speed slider
-        speed_frame = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
-        speed_frame.pack(side="left", padx=(20, 5))
-
-        ctk.CTkLabel(speed_frame, text="Speed", font=T.FONT_TINY,
-                      text_color=T.TEXT_MUTED).pack()
-        self._speed_label = ctk.CTkLabel(speed_frame, text="100%", font=T.FONT_SMALL,
-                                          text_color=T.TEXT_ACCENT)
-        self._speed_label.pack()
-
-        self._speed_slider = ctk.CTkSlider(
-            ctrl_inner, from_=25, to=300, number_of_steps=55,
-            width=120, height=16, fg_color=T.PROGRESS_BG,
-            progress_color=T.ACCENT, button_color=T.ACCENT_LIGHT,
-            command=self._on_speed_change
-        )
+        # Speed
+        self._speed_label = ctk.CTkLabel(ctrl, text="100%", font=T.FONT_TINY, text_color=T.TEXT_MUTED, width=35)
+        self._speed_label.pack(side="left", padx=(4, 2))
+        self._speed_slider = ctk.CTkSlider(ctrl, from_=25, to=300, number_of_steps=55, width=70, height=14,
+                                           fg_color=T.PROGRESS_BG, progress_color=T.ACCENT, button_color=T.ACCENT_LIGHT,
+                                           command=self._on_speed_change)
         self._speed_slider.set(100)
-        self._speed_slider.pack(side="left", padx=(0, 15))
+        self._speed_slider.pack(side="left", padx=(0, 6))
+
+        # Separator
+        ctk.CTkFrame(ctrl, width=1, height=22, fg_color=T.BORDER).pack(side="left", padx=4)
 
         # Transpose
-        tp_frame = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
-        tp_frame.pack(side="left", padx=5)
-
-        ctk.CTkLabel(tp_frame, text="Transpose", font=T.FONT_TINY,
-                      text_color=T.TEXT_MUTED).pack()
-        self._transpose_label = ctk.CTkLabel(tp_frame, text="0", font=T.FONT_SMALL,
-                                              text_color=T.TEXT_ACCENT)
-        self._transpose_label.pack()
-
-        self._transpose_slider = ctk.CTkSlider(
-            ctrl_inner, from_=-24, to=24, number_of_steps=48,
-            width=100, height=16, fg_color=T.PROGRESS_BG,
-            progress_color=T.ACCENT, button_color=T.ACCENT_LIGHT,
-            command=self._on_transpose_change
-        )
+        self._transpose_label = ctk.CTkLabel(ctrl, text="TP:0", font=T.FONT_TINY, text_color=T.TEXT_MUTED, width=32)
+        self._transpose_label.pack(side="left", padx=(4, 2))
+        self._transpose_slider = ctk.CTkSlider(ctrl, from_=-24, to=24, number_of_steps=48, width=70, height=14,
+                                               fg_color=T.PROGRESS_BG, progress_color=T.ACCENT, button_color=T.ACCENT_LIGHT,
+                                               command=self._on_transpose_change)
         self._transpose_slider.set(0)
         self._transpose_slider.pack(side="left")
 
-        # ─── Delay Setting ────────────────────────────────
-        delay_frame = ctk.CTkFrame(self, fg_color="transparent")
-        delay_frame.pack(fill="x", padx=20, pady=(0, 5))
 
-        ctk.CTkLabel(delay_frame, text="Start delay:", font=T.FONT_SMALL,
-                      text_color=T.TEXT_SECONDARY).pack(side="left")
-        self._delay_var = ctk.StringVar(value="3")
-        delay_entry = ctk.CTkEntry(
-            delay_frame, textvariable=self._delay_var, width=40, height=26,
-            font=T.FONT_SMALL, fg_color=T.BG_ELEVATED, border_color=T.BORDER
-        )
-        delay_entry.pack(side="left", padx=5)
-        ctk.CTkLabel(delay_frame, text="seconds  (time to switch to Roblox)",
-                      font=T.FONT_TINY, text_color=T.TEXT_MUTED).pack(side="left")
+        self._active_visuals = True
+        self._render_loop()
 
-        # ─── Console Log ──────────────────────────────────
-        console_frame = ctk.CTkFrame(self, fg_color=T.CONSOLE_BG, corner_radius=T.CORNER_RADIUS)
-        console_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-        console_header = ctk.CTkFrame(console_frame, fg_color="transparent")
-        console_header.pack(fill="x", padx=10, pady=(8, 0))
-        ctk.CTkLabel(console_header, text="Console", font=T.FONT_TINY,
-                      text_color=T.TEXT_MUTED).pack(side="left")
-
-        self._console = ctk.CTkTextbox(
-            console_frame, height=100, font=T.FONT_MONO_SMALL,
-            fg_color=T.CONSOLE_BG, text_color=T.TEXT_SECONDARY,
-            border_width=0, activate_scrollbars=True, wrap="word"
-        )
-        self._console.pack(fill="both", expand=True, padx=10, pady=(2, 10))
-        self._console.configure(state="disabled")
-
-        self._log("Ready. Open a MIDI file or select from Library.")
-        self._log("Hotkeys: F5 = Play | F6 = Pause/Resume | F7 = Stop")
-
-    # ─── File Operations ──────────────────────────────────
     def _open_file(self):
-        path = filedialog.askopenfilename(
-            title="Open MIDI File",
-            filetypes=[("MIDI Files", "*.mid *.midi"), ("All Files", "*.*")]
-        )
-        if path:
-            self.load_file(path)
+        path = filedialog.askopenfilename(title="Open MIDI", filetypes=[("MIDI Files", "*.mid *.midi"), ("All Files", "*.*")])
+        if path: self.load_file(path)
 
-    def load_file(self, path):
-        """Load a MIDI file for playback."""
-        if not os.path.exists(path):
-            self._log(f"✗ File not found: {path}")
-            return
-
-        self._current_file = path
+    def load_file(self, path, song_id=None):
+        if not os.path.exists(path): return
+        self._current_file, self._current_song_id = path, song_id
         self._song_info = get_song_info(path)
         info = self._song_info
-
-        # Update UI
-        display_name = info.title or os.path.basename(path)
-        self._file_label.configure(text=f"♪ {display_name}")
-        self._status_label.configure(text="File loaded", text_color=T.SUCCESS)
-
-        # Update info labels
+        self._file_label.configure(text=f"♪ {info.title or os.path.basename(path)}")
         mins, secs = divmod(int(info.duration), 60)
         self._info_labels["Duration"].configure(text=f"{mins}:{secs:02d}")
         self._info_labels["Notes"].configure(text=str(info.note_count))
         self._info_labels["Tempo"].configure(text=f"{info.tempo_bpm} BPM")
-
         if info.note_count > 0:
-            self._info_labels["Range"].configure(
-                text=f"{get_note_name(info.min_note)} — {get_note_name(info.max_note)}"
-            )
-        else:
-            self._info_labels["Range"].configure(text="—")
-
+            self._info_labels["Range"].configure(text=f"{get_note_name(info.min_note)} — {get_note_name(info.max_note)}")
         self._time_total.configure(text=f"{mins}:{secs:02d}")
+        self.engine.load(parse_midi(path))
 
-        # Check for multiple tracks
-        tracks = get_piano_tracks(path)
-        if len(tracks) > 1:
-            values = ["All Tracks"] + [f"Track {t[0]}: {t[1]} ({t[2]} notes)" for t in tracks]
-            self._track_menu.configure(values=values)
-            self._track_var.set("All Tracks")
-            self._track_frame.pack(fill="x", padx=20, pady=(0, 10), after=self._info_frame)
-        else:
-            self._track_frame.pack_forget()
-
-        # Parse and load into engine
-        self._parse_and_load()
-        self._log(f"✓ Loaded: {display_name} ({info.note_count} notes, {mins}:{secs:02d})")
-
-    def _parse_and_load(self, track_index=None):
-        """Parse current file and load into playback engine."""
-        if not self._current_file:
-            return
-        events = parse_midi(self._current_file, track_index)
-        self.engine.load(events)
-        self._progress_bar.set(0)
-        self._time_current.configure(text="0:00")
-        self._notes_progress.configure(text="")
-
-    def _on_track_change(self, selection):
-        if selection == "All Tracks":
-            self._parse_and_load(None)
-        else:
-            # Extract track index from "Track X: ..."
-            try:
-                idx = int(selection.split(":")[0].replace("Track", "").strip())
-                self._parse_and_load(idx)
-            except ValueError:
-                self._parse_and_load(None)
-
-    # ─── Playback Controls ────────────────────────────────
     def _play(self):
         if self.engine.is_playing:
-            if self.engine.is_paused:
-                self.engine.resume()
-                self._status_label.configure(text="Playing", text_color=T.SUCCESS)
+            if self.engine.is_paused: self.engine.resume()
         else:
-            try:
-                delay = float(self._delay_var.get())
-            except ValueError:
-                delay = 3.0
+            try: delay = float(self._delay_var.get())
+            except ValueError: delay = 3.0
             self.engine.start_delay = delay
             self.engine.play()
-            self._status_label.configure(text="Playing", text_color=T.SUCCESS)
+            
+            # INCREMENT PLAY COUNT IMMEDIATELY
+            if self._current_song_id:
+                def _inc_task():
+                    from library.cloud_database import CloudDatabase
+                    db = CloudDatabase()
+                    db.increment_play_count(self._current_song_id)
+                threading.Thread(target=_inc_task, daemon=True).start()
 
     def _pause(self):
-        if self.engine.is_playing:
-            self.engine.toggle_pause()
-            if self.engine.is_paused:
-                self._status_label.configure(text="Paused", text_color=T.WARNING)
-            else:
-                self._status_label.configure(text="Playing", text_color=T.SUCCESS)
-
-    def _stop(self):
-        self.engine.stop()
-        self._status_label.configure(text="Stopped", text_color=T.TEXT_MUTED)
-        self._progress_bar.set(0)
-        self._time_current.configure(text="0:00")
-        self._notes_progress.configure(text="")
+        if self.engine.is_playing: self.engine.toggle_pause()
+    def _stop(self): self.engine.stop()
 
     def _on_speed_change(self, value):
-        speed = int(value)
-        self._speed_label.configure(text=f"{speed}%")
-        self.engine.speed = speed / 100.0
+        s = int(value)
+        self._speed_label.configure(text=f"{s}%")
+        self.engine.speed = s / 100.0
 
     def _on_transpose_change(self, value):
         tp = int(value)
-        self._transpose_label.configure(text=f"{tp:+d}" if tp != 0 else "0")
+        self._transpose_label.configure(text=f"TP:{tp:+d}" if tp != 0 else "TP:0")
         self.engine.transpose = tp
 
-    # ─── Engine Callbacks (called from engine thread) ─────
-    def _on_progress(self, current, total, idx, total_events):
+    def _on_delay_confirm(self, event):
         try:
-            self.after(0, self._update_progress, current, total, idx, total_events)
-        except Exception:
-            pass
+            val = float(self._delay_var.get())
+            self.app.config["start_delay"] = val
+            from ui.settings_tab import save_config
+            save_config(self.app.config)
+        except ValueError: pass
+        self.focus()
 
+    def _on_progress(self, current, total, idx, total_events):
+        self.after(0, self._update_progress, current, total, idx, total_events)
     def _update_progress(self, current, total, idx, total_events):
-        if total > 0:
-            self._progress_bar.set(current / total)
+        if total > 0: self._progress_bar.set(current / total)
         mins, secs = divmod(int(current), 60)
         self._time_current.configure(text=f"{mins}:{secs:02d}")
-        self._notes_progress.configure(text=f"{idx}/{total_events} notes")
+        self._notes_progress.configure(text=f"{idx}/{total_events}")
 
-    def _on_note(self, midi_note, key_char):
-        pass  # Could add visual feedback here
+    def _on_note(self, n, k): pass
+    def _on_countdown(self, s):
+        msg = f"Starting in {s}s..." if s > 0 else "▶ Playing"
+        self._status_label.configure(text=msg)
+    def _on_finished(self): self._status_label.configure(text="Finished")
+    def _on_log(self, msg): self.after(0, self._append_log, msg)
 
-    def _on_countdown(self, seconds):
-        try:
-            self.after(0, self._update_countdown, seconds)
-        except Exception:
-            pass
+    def _draw_piano_grid(self):
+        self._canvas.delete("grid")
+        w, h = self._canvas.winfo_width(), self._canvas.winfo_height()
+        if w < 10: return
+        kw = w / 61
+        
+        # Subtle vertical lane lines
+        for i in range(62):
+            self._canvas.create_line(i*kw, 0, i*kw, h, fill="#1a1a1a", tags="grid")
+        
+        # Hit-line at bottom (where notes "land")
+        hit_y = h - 8
+        self._canvas.create_line(0, hit_y, w, hit_y, fill=T.ACCENT, width=3, tags="grid")
+        # Glow effect under hit-line
+        self._canvas.create_line(0, hit_y+2, w, hit_y+2, fill=T.ACCENT_DIM, width=1, tags="grid")
 
-    def _update_countdown(self, seconds):
-        if seconds > 0:
-            self._status_label.configure(text=f"Starting in {seconds}s...",
-                                          text_color=T.WARNING)
-        else:
-            self._status_label.configure(text="▶ Playing", text_color=T.SUCCESS)
+    def _render_loop(self):
+        if not self._active_visuals: return
+        try: self._update_roll()
+        except: pass
+        self.after(25, self._render_loop)  # ~40 FPS for smoother animation
 
-    def _on_finished(self):
-        try:
-            self.after(0, self._handle_finished)
-        except Exception:
-            pass
-
-    def _handle_finished(self):
-        self._status_label.configure(text="Finished", text_color=T.TEXT_ACCENT)
-        self._progress_bar.set(1.0)
-
-    def _on_log(self, msg):
-        try:
-            self.after(0, self._append_log, msg)
-        except Exception:
-            pass
-
-    # ─── Console ──────────────────────────────────────────
-    def _log(self, msg):
-        self._append_log(msg)
+    def _update_roll(self):
+        from core.key_mapping import MIDI_TO_KEY
+        
+        self._canvas.delete("note")
+        if not self.engine.events: return
+        
+        w = self._canvas.winfo_width()
+        h = self._canvas.winfo_height()
+        if w < 10 or h < 10: return
+        
+        ct = self.engine.current_time
+        look_ahead = 3.0   # Show notes 3 seconds into the future
+        look_behind = 0.15  # Keep notes visible briefly after being played
+        kw = w / 61         # Width per key column
+        hit_y = h - 8       # Where notes "land"
+        note_h = 22         # Height of each note block
+        
+        idx = self.engine.current_index
+        
+        for i in range(max(0, idx - 80), min(idx + 1200, len(self.engine.events))):
+            e = self.engine.events[i]
+            if e.velocity <= 0: continue  # Skip note_off events
+            
+            diff = e.time - ct  # Time until this note plays
+            
+            if diff > look_ahead: break       # Too far in future
+            if diff < -look_behind: continue   # Already passed
+            
+            if 36 <= e.note <= 96:
+                # Calculate position: notes fall from top (future) to hit_y (now)
+                # diff=look_ahead → y=0 (top), diff=0 → y=hit_y (bottom)
+                progress = 1.0 - (diff / look_ahead)  # 0.0=top, 1.0=hit_y
+                y_bottom = progress * hit_y
+                y_top = y_bottom - note_h
+                
+                x_left = (e.note - 36) * kw + 1
+                x_right = (e.note - 36 + 1) * kw - 1
+                
+                # Color: purple=falling, green=hitting, dim=past
+                if diff <= 0:
+                    fill = T.SUCCESS       # Currently playing — green flash
+                    outline = "#4ade80"
+                elif diff < 0.15:
+                    fill = T.ACCENT_LIGHT  # About to hit — bright
+                    outline = T.ACCENT
+                else:
+                    fill = T.ACCENT        # Falling — normal purple
+                    outline = T.ACCENT_HOVER
+                
+                # Draw note rectangle
+                self._canvas.create_rectangle(
+                    x_left, y_top, x_right, y_bottom,
+                    fill=fill, outline=outline, width=1, tags="note"
+                )
+                
+                # Draw key label inside note
+                key_char = MIDI_TO_KEY.get(e.note, "")
+                if key_char and kw > 6:  # Only show if column is wide enough
+                    cx = (x_left + x_right) / 2
+                    cy = (y_top + y_bottom) / 2
+                    font_size = max(7, min(11, int(kw * 0.6)))
+                    self._canvas.create_text(
+                        cx, cy, text=key_char,
+                        fill="#ffffff", font=("Consolas", font_size, "bold"),
+                        tags="note"
+                    )
 
     def _append_log(self, msg):
-        self._console.configure(state="normal")
-        self._console.insert("end", f"{msg}\n")
-        self._console.see("end")
-        self._console.configure(state="disabled")
+        # Log messages shown in status label since console was removed
+        pass

@@ -1,0 +1,10 @@
+{
+  "start_delay": 1.0,
+  "default_speed": 100,
+  "default_transpose": 0,
+  "always_on_top": false,
+  "hotkey_play": "F5",
+  "hotkey_stop": "F7",
+  "theme": "Blue",
+  "language": "vi"
+}
