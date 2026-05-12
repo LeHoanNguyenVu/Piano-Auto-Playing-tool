@@ -1,102 +1,122 @@
 """
-Bulk Uploader Tool — Tự động hóa việc thêm hàng ngàn bài nhạc lên Supabase.
-Cách dùng: 
-1. Để các file .mid vào một thư mục (mặc định là 'upload_queue')
-2. Chạy lệnh: python bulk_uploader.py
+Bulk Uploader Tool — Tự động hóa việc thêm bài nhạc và ảnh bìa lên Supabase.
 """
 
 import os
 import sys
 import mido
+import shutil
 from supabase import create_client, Client
 from library.cloud_database import SUPABASE_URL, SUPABASE_KEY
 
-# THƯ MỤC CHỨA NHẠC CẦN UPLOAD
+# CẤU HÌNH
 SOURCE_FOLDER = "upload_queue"
-# BUCKET TRÊN SUPABASE
-STORAGE_BUCKET = "songs"
-# BẢNG TRÊN SUPABASE
+STORAGE_BUCKET = "Songs"
 TABLE_NAME = "songs_catalog"
 
+def clean_string(s):
+    if not s: return ""
+    return "".join(ch for ch in str(s) if ch.isprintable()).strip().replace("\x00", "")
+
+def safe_filename(filename):
+    import unicodedata
+    import hashlib
+    name, ext = os.path.splitext(filename)
+    name = unicodedata.normalize('NFD', name)
+    name = "".join(ch for ch in name if unicodedata.category(ch) != 'Mn')
+    name = name.replace('đ', 'd').replace('Đ', 'D')
+    safe = "".join(ch if (ch.isascii() and (ch.isalnum() or ch in '-_ ')) else '_' for ch in name)
+    safe = safe.replace(' ', '_')
+    while '__' in safe: safe = safe.replace('__', '_')
+    return safe.strip('_') + ext
+
 def get_midi_title(file_path):
-    """Lấy tên bài hát từ metadata của file MIDI hoặc từ tên file."""
-    try:
-        mid = mido.MidiFile(file_path)
-        for track in mid.tracks:
-            for msg in track:
-                if msg.type == 'track_name' and msg.name.strip():
-                    return msg.name.strip()
-    except:
-        pass
-    return os.path.splitext(os.path.basename(file_path))[0]
+    filename = os.path.splitext(os.path.basename(file_path))[0]
+    return clean_string(filename.replace("_", " "))
 
 def upload_folder():
-    if not os.path.exists(SOURCE_FOLDER):
-        os.makedirs(SOURCE_FOLDER)
-        print(f"❌ Thư mục '{SOURCE_FOLDER}' không tồn tại. Đã tạo mới cho bạn.")
-        print("Hãy chép các file .mid vào đó rồi chạy lại script này.")
-        return
-
-    # Khởi tạo Supabase Client
-    # Lưu ý: Nên dùng Service Role Key nếu bị lỗi RLS (không có quyền chèn dữ liệu)
+    if not os.path.exists(SOURCE_FOLDER): os.makedirs(SOURCE_FOLDER)
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    files = [f for f in os.listdir(SOURCE_FOLDER) if f.lower().endswith(('.mid', '.midi'))]
-    if not files:
-        print(f"ℹ️ Không tìm thấy file MIDI nào trong '{SOURCE_FOLDER}'.")
+    all_files = os.listdir(SOURCE_FOLDER)
+    unique_names = set(os.path.splitext(f)[0] for f in all_files if os.path.isfile(os.path.join(SOURCE_FOLDER, f)))
+    
+    if not unique_names:
+        print(f"✨ Thư mục '{SOURCE_FOLDER}' đang trống.")
         return
 
-    print(f"🚀 Bắt đầu upload {len(files)} bài nhạc...")
+    print(f"🚀 Bắt đầu xử lý {len(unique_names)} bài nhạc...")
 
-    for filename in files:
-        file_path = os.path.join(SOURCE_FOLDER, filename)
-        title = get_midi_title(file_path)
-        # Giả định artist là tên file nếu không có metadata (bạn có thể sửa logic này)
-        artist = "Unknown Artist"
-        if " - " in title:
-            parts = title.split(" - ", 1)
-            artist, title = parts[0], parts[1]
+    for name_only in unique_names:
+        midi_file = None
+        image_file = None
+        for f in all_files:
+            if os.path.splitext(f)[0] == name_only:
+                ext = f.lower()
+                if ext.endswith(('.mid', '.midi')): midi_file = f
+                if ext.endswith(('.jpg', '.jpeg', '.png', '.webp')): image_file = f
 
-        print(f"\n──────────────────────────────────────────")
-        print(f"📦 Đang xử lý: {filename}")
+        if not midi_file and not image_file: continue
+        print(f"\n──────────────────────────────────────────\n📦 Đang xử lý: {name_only}")
         
-        try:
-            # 1. Upload lên Storage
-            with open(file_path, 'rb') as f:
-                # Ghi đè nếu đã tồn tại bằng upsert=True
-                res = supabase.storage.from_(STORAGE_BUCKET).upload(
-                    path=filename,
-                    file=f,
-                    file_options={"content-type": "audio/midi", "x-upsert": "true"}
-                )
-            
-            # 2. Lấy Public URL
-            file_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(filename)
-            
-            # 3. Chèn vào Database
-            song_data = {
-                "title": title,
-                "artist": artist,
-                "file_url": file_url,
-                "play_count": 0
-            }
-            
-            # Kiểm tra xem bài hát đã tồn tại chưa để tránh trùng lặp (dựa trên file_url)
-            check = supabase.table(TABLE_NAME).select("id").eq("file_url", file_url).execute()
-            
-            if check.data:
-                print(f"🔄 Bài hát đã tồn tại trên DB. Đang cập nhật thông tin...")
-                supabase.table(TABLE_NAME).update(song_data).eq("file_url", file_url).execute()
-            else:
-                print(f"✨ Đang thêm mới vào Database...")
-                supabase.table(TABLE_NAME).insert(song_data).execute()
-            
-            print(f"✅ Thành công: {title}")
-            
-        except Exception as e:
-            print(f"❌ Lỗi khi xử lý {filename}: {e}")
+        cover_url = None
+        if image_file:
+            print(f"🖼️ Uploading ảnh bìa...")
+            storage_name = safe_filename(image_file)
+            with open(os.path.join(SOURCE_FOLDER, image_file), 'rb') as f:
+                supabase.storage.from_(STORAGE_BUCKET).upload(path=storage_name, file=f, file_options={"x-upsert": "true"})
+            cover_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_name)
 
-    print(f"\n🏁 Đã hoàn thành tất cả!")
+        file_url = None
+        title = name_only.replace("_", " ")
+        artist = "Unknown Artist"
+        if midi_file:
+            print(f"🎹 Uploading MIDI...")
+            midi_path = os.path.join(SOURCE_FOLDER, midi_file)
+            title = get_midi_title(midi_path)
+            if " - " in title: artist, title = title.split(" - ", 1)
+            storage_name = safe_filename(midi_file)
+            with open(midi_path, 'rb') as f:
+                supabase.storage.from_(STORAGE_BUCKET).upload(path=storage_name, file=f, file_options={"content-type": "audio/midi", "x-upsert": "true"})
+            file_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_name)
+
+        try:
+            search_title = clean_string(title)
+            # 1. Thử tìm khớp hoàn toàn
+            check = supabase.table(TABLE_NAME).select("id").eq("title", search_title).execute()
+            
+            # 2. Nếu không thấy, thử tìm bỏ qua gạch dưới/khoảng trắng
+            if not check.data:
+                alt_title = search_title.replace("_", " ").strip()
+                check = supabase.table(TABLE_NAME).select("id").eq("title", alt_title).execute()
+
+            song_data = {"title": search_title, "artist": clean_string(artist)}
+            if file_url: song_data["url"] = file_url
+            if cover_url: song_data["cover_url"] = cover_url
+            
+            success_op = False
+            if check.data:
+                supabase.table(TABLE_NAME).update(song_data).eq("id", check.data[0]['id']).execute()
+                print(f"✅ Đã cập nhật xong!")
+                success_op = True
+            elif midi_file:
+                song_data["play_count"] = 0
+                supabase.table(TABLE_NAME).insert(song_data).execute()
+                print(f"✅ Đã thêm mới xong!")
+                success_op = True
+            else:
+                print(f"⚠️ KHÔNG TÌM THẤY bài '{search_title}' trên DB. Hãy kiểm tra lại tên file ảnh!")
+
+            # CHỈ XÓA KHI THỰC SỰ THÀNH CÔNG
+            if success_op:
+                if midi_file: os.remove(os.path.join(SOURCE_FOLDER, midi_file))
+                if image_file: os.remove(os.path.join(SOURCE_FOLDER, image_file))
+            else:
+                print(f"ℹ️ Giữ lại file trong upload_queue để bạn sửa tên.")
+        except Exception as e:
+            print(f"❌ Lỗi: {e}")
+
+    print(f"\n🏁 Xong!")
 
 if __name__ == "__main__":
     upload_folder()

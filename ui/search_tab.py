@@ -16,6 +16,9 @@ class SearchTab(ctk.CTkFrame):
         self.app = app
         self.db = None
         self._result_widgets = []
+        self._all_results = [] # Lưu toàn bộ kết quả tìm kiếm
+        self._displayed_count = 0 # Số lượng bài đang hiển thị
+        self._batch_size = 30 # Mỗi lần hiện thêm bao nhiêu bài
         self._search_timer = None
         self._build_ui()
         self.after(200, self._init_db)
@@ -40,8 +43,49 @@ class SearchTab(ctk.CTkFrame):
         self._search_btn = ctk.CTkButton(search_bar, text="🔍", width=50, height=32, fg_color=T.ACCENT, command=self._search)
         self._search_btn.pack(side="right", padx=10)
 
+        self._count_label = ctk.CTkLabel(self, text="", font=T.FONT_BODY, text_color=T.TEXT_MUTED)
+        self._count_label.pack(anchor="w", padx=25, pady=(0, 5))
+
         self._results_frame = ctk.CTkScrollableFrame(self, fg_color=T.BG_DARKEST, corner_radius=T.CORNER_RADIUS)
         self._results_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        # TĂNG TỐC ĐỘ CUỘN CHUỘT
+        self._results_frame.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _on_mousewheel(self, event):
+        """Tăng tốc độ cuộn chuột lên cực kỳ nhanh."""
+        # Chia cho 3 = Cực nhanh. 120/3 = 40 đơn vị cuộn mỗi nấc.
+        self._results_frame._parent_canvas.yview_scroll(int(-1*(event.delta/3)), "units")
+        
+        # KIỂM TRA XEM ĐÃ CUỘN XUỐNG CUỐI CHƯA
+        # y_pos: 0.0 là đầu trang, 1.0 là cuối trang
+        y_pos = self._results_frame._parent_canvas.yview()[1]
+        if y_pos > 0.9: # Nếu cuộn quá 90% danh sách
+            self._load_more_results()
+
+    def _load_more_results(self):
+        """Tải thêm một đợt bài nhạc tiếp theo."""
+        if self._displayed_count >= len(self._all_results):
+            return # Đã hiện hết sạch rồi
+            
+        start = self._displayed_count
+        end = start + self._batch_size
+        next_batch = self._all_results[start:end]
+        
+        favs = cloud_database.load_favorites()
+        for s in next_batch:
+            self._create_row(s, favs)
+            
+        self._displayed_count = end
+        self._update_count_label()
+
+    def _update_count_label(self):
+        total = len(self._all_results)
+        shown = min(self._displayed_count, total)
+        if total == 0:
+            self._count_label.configure(text="Không tìm thấy bài hát nào.")
+        else:
+            self._count_label.configure(text=f"Đang hiện {shown} / {total} bài hát")
 
     def _init_db(self):
         def _worker(): self.db = cloud_database.CloudDatabase()
@@ -57,7 +101,8 @@ class SearchTab(ctk.CTkFrame):
         query = self._search_var.get().strip()
         if not self.db: return
         if not query:
-            self._display_results(self.db.catalog[:50]) # Show initial catalog
+            # Bỏ giới hạn [:50] để lấy toàn bộ danh sách
+            self._display_results(self.db.catalog) 
             return
             
         def _worker():
@@ -67,31 +112,80 @@ class SearchTab(ctk.CTkFrame):
 
     def _display_results(self, songs):
         self._clear_results()
-        if not songs:
+        self._all_results = songs or []
+        self._displayed_count = 0
+        
+        if not self._all_results:
+            self._update_count_label()
             self._show_message(T.L("no_results"))
             return
-        favs = cloud_database.load_favorites()
-        for s in songs: self._create_row(s, favs)
+        
+        # Hiển thị đợt đầu tiên
+        self._load_more_results()
 
     def _create_row(self, song, favs):
         song_id = str(song.get('id'))
         already_fav = song_id in favs
         row = ctk.CTkFrame(self._results_frame, fg_color=T.BG_CARD, corner_radius=8)
         row.pack(fill="x", padx=5, pady=4)
-        inner = ctk.CTkFrame(row, fg_color="transparent")
-        inner.pack(fill="x", padx=12, pady=10)
         
-        title_text = f"{song.get('title', 'Unknown')} - {song.get('artist', 'Unknown')}"
-        ctk.CTkLabel(inner, text=title_text, font=T.FONT_BODY_BOLD, text_color=T.TEXT_PRIMARY).pack(side="left")
+        # Container chính dùng grid để căn chỉnh ảnh và text
+        row.grid_columnconfigure(1, weight=1)
         
-        btns = ctk.CTkFrame(inner, fg_color="transparent")
-        btns.pack(side="right")
+        # 1. PHẦN HÌNH ẢNH (THUMBNAIL)
+        from PIL import Image
+        import requests
+        from io import BytesIO
+
+        # Tạo frame chứa ảnh
+        img_frame = ctk.CTkFrame(row, width=60, height=60, fg_color=T.BG_DARKEST, corner_radius=6)
+        img_frame.pack(side="left", padx=10, pady=10)
+        img_frame.pack_propagate(False)
+
+        def _load_img(label, url):
+            try:
+                if url:
+                    response = requests.get(url, timeout=5)
+                    img_data = BytesIO(response.content)
+                    pil_img = Image.open(img_data)
+                else:
+                    raise Exception("No URL")
+            except:
+                # Ảnh mặc định nếu lỗi hoặc không có link
+                pil_img = Image.new('RGB', (60, 60), color='#1e293b')
+            
+            ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(60, 60))
+            self.after(0, lambda: label.configure(image=ctk_img, text=""))
+
+        img_label = ctk.CTkLabel(img_frame, text="🎵", font=("Arial", 24))
+        img_label.pack(expand=True, fill="both")
+        
+        # Tải ảnh ở luồng riêng để không treo UI
+        threading.Thread(target=_load_img, args=(img_label, song.get('cover_url')), daemon=True).start()
+
+        # 2. PHẦN THÔNG TIN (TIÊU ĐỀ)
+        info_frame = ctk.CTkFrame(row, fg_color="transparent")
+        info_frame.pack(side="left", fill="both", expand=True, pady=10)
+        
+        # Tiêu đề với tính năng tự động xuống dòng (wraplength=300-400 tùy độ rộng)
+        ctk.CTkLabel(info_frame, 
+                     text=song.get('title', 'Unknown'), 
+                     font=T.FONT_BODY_BOLD, 
+                     text_color=T.TEXT_PRIMARY, 
+                     anchor="w",
+                     justify="left",
+                     wraplength=350).pack(fill="x", padx=(0, 10))
+        
+        # 3. PHẦN NÚT BẤM
+        btns = ctk.CTkFrame(row, fg_color="transparent")
+        btns.pack(side="right", padx=10)
         
         fav_text = "❤" if already_fav else "🤍"
         ctk.CTkButton(btns, text=fav_text, width=40, height=32, fg_color="#be185d" if already_fav else T.BG_ELEVATED,
                        command=lambda s=song: self._toggle_favorite(s)).pack(side="left", padx=5)
         ctk.CTkButton(btns, text=T.L("play"), width=80, height=32, fg_color=T.SUCCESS,
                        command=lambda s=song: self._play_song(s)).pack(side="left")
+        
         self._result_widgets.append(row)
 
     def _play_song(self, song):
