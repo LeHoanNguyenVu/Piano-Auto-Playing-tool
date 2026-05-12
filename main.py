@@ -21,6 +21,14 @@ def main():
     # Import and launch
     from ui.app import App
     app = App()
+    
+    # Close the PyInstaller splash screen just before showing the main window
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
+
     app.mainloop()
 
 

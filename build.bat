@@ -11,6 +11,8 @@ pyinstaller --onefile --windowed ^
     --add-data "library;library" ^
     --hidden-import customtkinter ^
     --hidden-import mido.backends.rtmidi ^
+    --collect-all supabase ^
+    --splash splash.png ^
     main.py
 
 echo.
