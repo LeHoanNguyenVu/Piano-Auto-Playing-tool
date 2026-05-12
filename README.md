@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/LeHoanNguyenVu/Piano-Auto-Playing-tool/main/splash.png" width="400" alt="Logo">
+  <img src="AutoPiano.png" width="400" alt="Logo">
 
   # 🎹 Roblox Piano Auto Player
 
