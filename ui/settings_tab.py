@@ -152,10 +152,10 @@ class SettingsTab(ctk.CTkScrollableFrame):
 
     def _check_cloud_status(self):
         try:
-            import library.cloud_database as cdb
-            temp_db = cdb.CloudDatabase()
-            status_text = "Connected ✅" if temp_db.is_connected else "Disconnected ❌"
-            status_color = T.SUCCESS if temp_db.is_connected else T.ERROR
+            from library.cloud_database import get_cloud_db
+            db = get_cloud_db()
+            status_text = "Connected ✅" if db.is_connected else "Disconnected ❌"
+            status_color = T.SUCCESS if db.is_connected else T.ERROR
             self.after(0, lambda: self._cloud_status_label.configure(text=status_text, text_color=status_color))
         except Exception:
             self.after(0, lambda: self._cloud_status_label.configure(text="Error ❌", text_color=T.ERROR))

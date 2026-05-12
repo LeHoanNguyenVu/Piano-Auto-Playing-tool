@@ -44,7 +44,8 @@ class TrendsTab(ctk.CTkFrame):
 
     def _init_and_load(self):
         def _worker():
-            self.db = cloud_database.CloudDatabase()
+            from library.cloud_database import get_cloud_db
+            self.db = get_cloud_db()
             self._load_trends()
         threading.Thread(target=_worker, daemon=True).start()
 

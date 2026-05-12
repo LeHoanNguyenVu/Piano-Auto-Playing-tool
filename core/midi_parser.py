@@ -49,38 +49,41 @@ def parse_midi(file_path, track_index=None):
     """
     mid = mido.MidiFile(file_path)
     events = []
+    ticks_per_beat = mid.ticks_per_beat
 
-    if mid.type == 2:
-        # Type 2 MIDI: each track is independent, use first or specified track
-        tracks_to_use = [mid.tracks[track_index or 0]]
-    elif track_index is not None and track_index < len(mid.tracks):
+    if track_index is not None and track_index < len(mid.tracks):
         tracks_to_use = [mid.tracks[track_index]]
+    elif mid.type == 2:
+        # Type 2 MIDI: each track is independent, use first track
+        tracks_to_use = [mid.tracks[0]]
     else:
         tracks_to_use = mid.tracks
 
-    # Merge all selected tracks and convert to absolute time
+    # ── QUAN TRỌNG: Merge tất cả tracks trước khi xử lý ──────
+    # Điều này đảm bảo tempo từ Track 0 áp dụng đúng cho MỌI track.
+    # Cách cũ (parse từng track riêng) gây lệch tốc độ giữa các track
+    # → nghe như 2 luồng nhạc chạy song song.
+    if len(tracks_to_use) > 1:
+        merged = mido.merge_tracks(tracks_to_use)
+    else:
+        merged = tracks_to_use[0]
+
+    # Parse merged track với 1 biến tempo duy nhất
     tempo = 500000  # Default: 120 BPM
-    ticks_per_beat = mid.ticks_per_beat
+    abs_time = 0.0
 
-    for track in tracks_to_use:
-        abs_time = 0.0
-        current_tempo = tempo
+    for msg in merged:
+        # Convert delta ticks to seconds
+        if msg.time > 0:
+            abs_time += mido.tick2second(msg.time, ticks_per_beat, tempo)
 
-        for msg in track:
-            # Convert delta ticks to seconds
-            if msg.time > 0:
-                abs_time += mido.tick2second(msg.time, ticks_per_beat, current_tempo)
+        if msg.type == 'set_tempo':
+            tempo = msg.tempo
+        elif msg.type == 'note_on':
+            events.append(NoteEvent(abs_time, msg.note, msg.velocity))
+        elif msg.type == 'note_off':
+            events.append(NoteEvent(abs_time, msg.note, 0))
 
-            if msg.type == 'set_tempo':
-                current_tempo = msg.tempo
-            elif msg.type == 'note_on':
-                vel = msg.velocity
-                events.append(NoteEvent(abs_time, msg.note, vel))
-            elif msg.type == 'note_off':
-                events.append(NoteEvent(abs_time, msg.note, 0))
-
-    # Sort by time (stable sort preserves order for simultaneous events)
-    events.sort(key=lambda e: e.time)
     return events
 
 

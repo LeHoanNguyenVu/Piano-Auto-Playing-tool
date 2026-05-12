@@ -32,7 +32,10 @@ def safe_filename(filename):
 
 def get_midi_title(file_path):
     filename = os.path.splitext(os.path.basename(file_path))[0]
-    return clean_string(filename.replace("_", " "))
+    title = clean_string(filename.replace("_", " "))
+    # Loại bỏ khoảng trắng thừa (vd: "Blue  Yung" → "Blue Yung")
+    while "  " in title: title = title.replace("  ", " ")
+    return title.strip()
 
 def upload_folder():
     if not os.path.exists(SOURCE_FOLDER): os.makedirs(SOURCE_FOLDER)
@@ -82,22 +85,37 @@ def upload_folder():
 
         try:
             search_title = clean_string(title)
-            # 1. Thử tìm khớp hoàn toàn
-            check = supabase.table(TABLE_NAME).select("id").eq("title", search_title).execute()
+            existing_id = None
             
-            # 2. Nếu không thấy, thử tìm bỏ qua gạch dưới/khoảng trắng
-            if not check.data:
-                alt_title = search_title.replace("_", " ").strip()
-                check = supabase.table(TABLE_NAME).select("id").eq("title", alt_title).execute()
+            # TÌM BÀI HÁT ĐÃ TỒN TẠI TRÊN DB (ƯU TIÊN TÌM THEO URL)
+            # 1. Tìm theo URL (chính xác nhất — vì mỗi file có 1 URL duy nhất)
+            if file_url:
+                check = supabase.table(TABLE_NAME).select("id").eq("url", file_url).execute()
+                if check.data:
+                    existing_id = check.data[0]['id']
+            
+            # 2. Nếu chưa tìm thấy, thử tìm theo title chính xác
+            if not existing_id:
+                check = supabase.table(TABLE_NAME).select("id").eq("title", search_title).execute()
+                if check.data:
+                    existing_id = check.data[0]['id']
+            
+            # 3. Nếu vẫn chưa, thử tìm linh hoạt (bỏ khoảng trắng thừa)
+            if not existing_id:
+                # Tìm gần đúng: "Blue  Yung Kai" sẽ khớp với "Blue Yung Kai"
+                check = supabase.table(TABLE_NAME).select("id, title").ilike("title", f"%{search_title}%").execute()
+                if check.data:
+                    existing_id = check.data[0]['id']
 
+            # CẬP NHẬT HOẶC THÊM MỚI
             song_data = {"title": search_title, "artist": clean_string(artist)}
             if file_url: song_data["url"] = file_url
             if cover_url: song_data["cover_url"] = cover_url
             
             success_op = False
-            if check.data:
-                supabase.table(TABLE_NAME).update(song_data).eq("id", check.data[0]['id']).execute()
-                print(f"✅ Đã cập nhật xong!")
+            if existing_id:
+                supabase.table(TABLE_NAME).update(song_data).eq("id", existing_id).execute()
+                print(f"✅ Đã cập nhật bài cũ (ID: {existing_id})!")
                 success_op = True
             elif midi_file:
                 song_data["play_count"] = 0
@@ -105,7 +123,7 @@ def upload_folder():
                 print(f"✅ Đã thêm mới xong!")
                 success_op = True
             else:
-                print(f"⚠️ KHÔNG TÌM THẤY bài '{search_title}' trên DB. Hãy kiểm tra lại tên file ảnh!")
+                print(f"⚠️ KHÔNG TÌM THẤY bài '{search_title}' trên DB.")
 
             # CHỈ XÓA KHI THỰC SỰ THÀNH CÔNG
             if success_op:

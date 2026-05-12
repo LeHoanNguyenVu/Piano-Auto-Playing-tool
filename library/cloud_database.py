@@ -183,6 +183,8 @@ def get_all_favorites() -> list:
 
 # ─── Cloud Catalog ─────────────────────────────────────────
 
+import time as _time
+import threading
 from supabase import create_client, Client
 
 def load_env():
@@ -202,40 +204,102 @@ ENV = load_env()
 SUPABASE_URL = ENV.get("SUPABASE_URL", "https://your-project-id.supabase.co")
 SUPABASE_KEY = ENV.get("SUPABASE_KEY", "your-anon-key")
 
+# ─── Local Cache ───────────────────────────────────────────
+_CACHE_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'RobloxPianoPlayer'
+_CACHE_FILE = _CACHE_DIR / 'catalog_cache.json'
+
+def _load_cache():
+    """Load catalog từ file cache local (gần như instant)."""
+    try:
+        if _CACHE_FILE.exists():
+            data = json.loads(_CACHE_FILE.read_text(encoding='utf-8'))
+            return data.get('catalog', []), data.get('timestamp', 0)
+    except Exception:
+        pass
+    return [], 0
+
+def _save_cache(catalog):
+    """Lưu catalog vào cache local."""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        data = {'catalog': catalog, 'timestamp': _time.time()}
+        _CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+
+# ─── Singleton ─────────────────────────────────────────────
+_instance = None
+_instance_lock = threading.Lock()
+
+def get_cloud_db():
+    """Trả về singleton CloudDatabase. Thread-safe."""
+    global _instance
+    if _instance is None:
+        with _instance_lock:
+            if _instance is None:
+                _instance = CloudDatabase()
+    return _instance
+
+
 class CloudDatabase:
     """
     Quản lý Cloud Catalog thông qua Supabase:
     - Truy vấn danh sách bài hát từ bảng songs_catalog
     - Tải .mid từ Supabase Storage
+    - Cache local để mở App hiện danh sách ngay lập tức
     """
 
     def __init__(self):
         self.catalog = []
         self._connected = False
         self.supabase: Client = None
+        self.on_catalog_updated = None  # Callback khi catalog được refresh xong
         
+        # 1. Load cache ngay lập tức (< 1ms)
+        cached, cache_time = _load_cache()
+        if cached:
+            self.catalog = cached
+        
+        # 2. Kết nối Supabase
         if SUPABASE_URL != "https://your-project-id.supabase.co":
             try:
                 self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-                self.refresh_catalog()
+                # Nếu có cache → dùng cache trước, refresh ở nền
+                if cached:
+                    self._connected = True
+                    self._background_refresh()
+                else:
+                    # Không có cache → phải tải trực tiếp
+                    self.refresh_catalog()
             except Exception as e:
                 print(f"Lỗi kết nối Supabase: {e}")
+
+    def _background_refresh(self):
+        """Refresh catalog ở background thread, không block UI."""
+        def _worker():
+            self.refresh_catalog()
+            if self.on_catalog_updated:
+                self.on_catalog_updated()
+        threading.Thread(target=_worker, daemon=True).start()
 
     def refresh_catalog(self):
         """Tải danh sách bài hát từ Supabase Table."""
         if not self.supabase:
-            self.catalog = list(FALLBACK_DATABASE)
+            if not self.catalog:
+                self.catalog = list(FALLBACK_DATABASE)
             return False
             
         try:
-            # Truy vấn bảng songs_catalog
             response = self.supabase.table("songs_catalog").select("*").execute()
             self.catalog = response.data
             self._connected = True
+            # Lưu cache cho lần mở App sau
+            _save_cache(self.catalog)
             return True
         except Exception as e:
             print(f"Lỗi tải catalog: {e}")
-            self.catalog = list(FALLBACK_DATABASE)
+            if not self.catalog:
+                self.catalog = list(FALLBACK_DATABASE)
             self._connected = False
             return False
 

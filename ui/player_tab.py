@@ -190,8 +190,8 @@ class PlayerTab(ctk.CTkFrame):
             # INCREMENT PLAY COUNT IMMEDIATELY
             if self._current_song_id:
                 def _inc_task():
-                    from library.cloud_database import CloudDatabase
-                    db = CloudDatabase()
+                    from library.cloud_database import get_cloud_db
+                    db = get_cloud_db()
                     db.increment_play_count(self._current_song_id)
                 threading.Thread(target=_inc_task, daemon=True).start()
 

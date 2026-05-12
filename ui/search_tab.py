@@ -88,8 +88,21 @@ class SearchTab(ctk.CTkFrame):
             self._count_label.configure(text=f"Đang hiện {shown} / {total} bài hát")
 
     def _init_db(self):
-        def _worker(): self.db = cloud_database.CloudDatabase()
+        """Khởi tạo DB: hiện cache ngay, refresh ở nền."""
+        def _worker():
+            from library.cloud_database import get_cloud_db
+            db = get_cloud_db()
+            db.on_catalog_updated = lambda: self.after(0, self._on_db_refreshed)
+            self.db = db
+            # Hiện danh sách ngay từ cache (nếu có)
+            if db.catalog:
+                self.after(0, lambda: self._display_results(db.catalog))
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_db_refreshed(self):
+        """Callback khi Supabase refresh xong — cập nhật danh sách nếu cần."""
+        if self.db and not self._search_var.get().strip():
+            self._display_results(self.db.catalog)
 
     def _on_type(self, *args):
         """Suggestions logic: debounce search while typing."""
@@ -200,6 +213,10 @@ class SearchTab(ctk.CTkFrame):
 
     def _start_playback(self, path, song_id):
         if hasattr(self.app, 'player_tab'):
+            # ÉP BUỘC DỪNG BÀI CŨ TRIỆT ĐỂ
+            if hasattr(self.app.player_tab, 'engine'):
+                self.app.player_tab.engine.stop()
+            
             self.app.player_tab.load_file(path, song_id)
             self.app.show_frame("player")
             self.app.player_tab._play()
